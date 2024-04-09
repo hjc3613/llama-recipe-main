@@ -16,7 +16,8 @@ import torch.distributed as dist
 from torch.distributed.fsdp import StateDictType
 from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 from tqdm import tqdm
-from transformers import LlamaTokenizer
+# from transformers import LlamaTokenizer
+from llama_recipes.import_llama import LlamaTokenizer, LlamaForCausalLM
 import json
 
 
@@ -79,6 +80,10 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
     checkpoint_times = []
     results = {}
     best_val_loss = float("inf")
+    #saving the training params including fsdp setting for reference.
+    if train_config.enable_fsdp and not train_config.use_peft:
+        save_train_params(train_config, fsdp_config, rank)
+        
     for epoch in range(train_config.num_epochs):
         epoch_start_time = time.perf_counter()
         with MemoryTrace() as memtrace:  # track the memory usage
@@ -164,53 +169,12 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
 
         if train_config.run_validation:
             eval_ppl, eval_epoch_loss, temp_val_loss, temp_step_perplexity = evaluation(model, train_config, eval_dataloader, local_rank, tokenizer)
+            # eval_ppl, eval_epoch_loss, temp_val_loss, temp_step_perplexity = 0, 0, 0, 0 # 不进行验证，直接进入保存
             if train_config.save_metrics:
                 val_step_loss.extend(temp_val_loss)
                 val_step_perplexity.extend(temp_step_perplexity)
 
-            checkpoint_start_time = time.perf_counter()
-            if train_config.save_model and eval_epoch_loss < best_val_loss:
-                if train_config.enable_fsdp:
-                    dist.barrier()
-                if train_config.use_peft:
-                    if train_config.enable_fsdp:
-                        if rank==0:
-                            print(f"we are about to save the PEFT modules")
-                    else:
-                        print(f"we are about to save the PEFT modules")
-                    model.save_pretrained(train_config.output_dir)
-                    if train_config.enable_fsdp:
-                        if rank==0:
-                            print(f"PEFT modules are saved in {train_config.output_dir} directory")
-                    else:
-                        print(f"PEFT modules are saved in {train_config.output_dir} directory")
-
-                else:
-                    if not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.FULL_STATE_DICT:
-
-                        save_model_checkpoint(
-                            model, optimizer, rank, train_config, epoch=epoch
-                        )
-                    elif not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.SHARDED_STATE_DICT:
-                        print(" Saving the FSDP model checkpoints using SHARDED_STATE_DICT")
-                        print("=====================================================")
-
-                        save_model_and_optimizer_sharded(model, rank, train_config)
-                        if train_config.save_optimizer:
-                            save_model_and_optimizer_sharded(model, rank, train_config, optim=optimizer)
-                            print(" Saving the FSDP model checkpoints and optimizer using SHARDED_STATE_DICT")
-                            print("=====================================================")
-
-                    if not train_config.use_peft and  train_config.save_optimizer:
-                        save_optimizer_checkpoint(
-                            model, optimizer, rank, train_config, epoch=epoch
-                        )
-                        print(" Saving the FSDP model checkpoints and optimizer using FULL_STATE_DICT")
-                        print("=====================================================")
-                if train_config.enable_fsdp:
-                    dist.barrier()
-            checkpoint_end_time = time.perf_counter() - checkpoint_start_time
-            checkpoint_times.append(checkpoint_end_time)
+            
             if eval_epoch_loss < best_val_loss:
                 best_val_loss = eval_epoch_loss
                 if train_config.enable_fsdp:
@@ -220,11 +184,56 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                     print(f"best eval loss on epoch {epoch+1} is {best_val_loss}")
             val_loss.append(float(best_val_loss))
             val_prep.append(float(eval_ppl))
+        if train_config.save_model:
+            checkpoint_start_time = time.perf_counter()
+            if train_config.enable_fsdp:
+                dist.barrier()
+            if train_config.use_peft:
+                if train_config.enable_fsdp:
+                    if rank==0:
+                        print(f"we are about to save the PEFT modules")
+                else:
+                    print(f"we are about to save the PEFT modules")
+                model.save_pretrained(train_config.output_dir)
+                if train_config.enable_fsdp:
+                    if rank==0:
+                        print(f"PEFT modules are saved in {train_config.output_dir} directory")
+                else:
+                    print(f"PEFT modules are saved in {train_config.output_dir} directory")
+
+            else:
+                if not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.FULL_STATE_DICT:
+
+                    save_model_checkpoint(
+                        model, optimizer, rank, train_config, epoch=epoch
+                    )
+                elif not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.SHARDED_STATE_DICT:
+                    print(" Saving the FSDP model checkpoints using SHARDED_STATE_DICT")
+                    print("=====================================================")
+
+                    save_model_and_optimizer_sharded(model, rank, train_config)
+                    if train_config.save_optimizer:
+                        save_model_and_optimizer_sharded(model, rank, train_config, optim=optimizer)
+                        print(" Saving the FSDP model checkpoints and optimizer using SHARDED_STATE_DICT")
+                        print("=====================================================")
+
+                if not train_config.use_peft and  train_config.save_optimizer:
+                    save_optimizer_checkpoint(
+                        model, optimizer, rank, train_config, epoch=epoch
+                    )
+                    print(" Saving the FSDP model checkpoints and optimizer using FULL_STATE_DICT")
+                    print("=====================================================")
+            if train_config.enable_fsdp:
+                dist.barrier()
+            checkpoint_end_time = time.perf_counter() - checkpoint_start_time
+            checkpoint_times.append(checkpoint_end_time)
         if train_config.enable_fsdp:
             if rank==0:
-                print(f"Epoch {epoch+1}: train_perplexity={train_perplexity:.4f}, train_epoch_loss={train_epoch_loss:.4f}, epoch time {epoch_end_time}s")
+                # print(f"Epoch {epoch+1}: train_perplexity={train_perplexity:.4f}, train_epoch_loss={train_epoch_loss:.4f}, epoch time {epoch_end_time}s")
+                print(f"Epoch {epoch+1}: train_perplexity={str(train_perplexity)}, train_epoch_loss={str(train_epoch_loss)}, epoch time {epoch_end_time}s")
         else:
-            print(f"Epoch {epoch+1}: train_perplexity={train_perplexity:.4f}, train_epoch_loss={train_epoch_loss:.4f}, epoch time {epoch_end_time}s")
+            # print(f"Epoch {epoch+1}: train_perplexity={train_perplexity:.4f}, train_epoch_loss={train_epoch_loss:.4f}, epoch time {epoch_end_time}s")
+            print(f"Epoch {epoch+1}: train_perplexity={str(train_perplexity)}, train_epoch_loss={str(train_epoch_loss)}, epoch time {epoch_end_time}s")
         
         # Saving the results every epoch to plot later
         if train_config.save_metrics:
@@ -316,11 +325,16 @@ def evaluation(model,train_config, eval_dataloader, local_rank, tokenizer):
     return eval_ppl, eval_epoch_loss, val_step_loss, val_step_perplexity
 
 def freeze_transformer_layers(model, num_layer):
-   for i, layer in enumerate(model.model.layers):
+    for i, layer in enumerate(model.model.layers):
             if i < num_layer:
                 for param in layer.parameters():
                     param.requires_grad = False
 
+def freeze_transformer_layers_for_qwen(model:LlamaForCausalLM, num_layer:int, strategy:int):
+    for i, layer in enumerate(model.transformer.h, start=1):
+            if i < num_layer and i%strategy==0: # 冻结num_layer层以下且是strategy倍数的层
+                for param in layer.parameters():
+                    param.requires_grad = False
 
 def check_frozen_layers_peft_model(model):
      for i, layer in enumerate(model.base_model.model.model.layers):
@@ -433,13 +447,13 @@ def save_train_params(train_config, fsdp_config, rank):
     + "/"
     + train_config.dist_checkpoint_folder
     + "-"
-    + train_config.model_name
+    + train_config.model_name.strip('/').split('/')[-1]
     )
 
     save_dir = Path.cwd() / folder_name
     # If the directory does not exist, create it
     if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+        os.makedirs(save_dir, exist_ok=True)
     # Convert the dictionary to a YAML string
     config_yaml = yaml.dump(train_params_dict, indent=4)
     file_name = os.path.join(save_dir,'train_params.yaml')

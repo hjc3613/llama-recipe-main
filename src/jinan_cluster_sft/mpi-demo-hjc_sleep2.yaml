@@ -1,0 +1,89 @@
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: hjc-dev-2-node-sleep  #必须填写，任务的名字，用户自定义
+  namespace: med  #必须填写，任务所在的 namespace,只有 2个可选一个是自己的名字一个是自己组的名字，例如刘畅用户只能填，liuchang 或者 med
+spec:
+  slotsPerWorker: 8 
+  runPolicy:
+    cleanPodPolicy: Running
+  sshAuthMountPath: /home/hujunchao/.ssh  #,必须填写，做普通用户免密钥的时候用到，格式为 /home/自己的 ldap 名字/.ssh
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          containers:
+          #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
+          - image: harbor.unijn.cn/hujunchao/hjc_image6:v0     #必须填写，自己构建的镜像，注意一定要上传到 harbor 才能使用
+            securityContext:
+              privileged: true
+            name: mpi-launcher
+            command:
+            - /bin/bash
+            - -c
+            args:
+            - sleep 1d
+            resources:
+              limits:
+                cpu: 10
+                memory: 20Gi
+            volumeMounts:
+            # 容器存储卷目录
+            - mountPath: /fl-ift/med  #必须填写，对应调试机的目录
+            # 引入名称为nginx-volume的存储定义
+              name: jfs
+          volumes:
+          - name: jfs
+            hostPath:
+              path: /fl-ift/med
+    Worker:
+      replicas: 2 #必须填写，分布式训练的节点数量，单节点就写1 ，2 个节点就写 2
+      template:
+        spec:
+          containers:
+          #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
+          - image: harbor.unijn.cn/hujunchao/hjc_image6:v0
+            securityContext:
+              privileged: true
+            command: ["/bin/sh","-c"]  # 这块command + args可以视作等价于docker exec -it /bin/bash -c "some_command"
+            args: ["sudo service ssh start && sleep 1d"]
+            # 先启动ssh服务（便于后续登上去看状态），然后启动bash脚本，bash脚本替换为你想要运行的任务
+            # 也可以直接运行python程序，加入要运行python，可以这样写(此处以启动triton server为例）
+            # command: ["/bin/sh","-c"]
+            # args: [
+            # "sudo service ssh start && cd /fl-ift/med/hujunchao/git_root/llama-recipes-main/src/ && torchrun --nnodes 1 --nproc_per_node 8 finetuning.py \
+            # --model_name /fl-ift/med/hujunchao/models/Qwen1.5-72B-Chat/ \
+            # --dataset /fl-ift/med/hujunchao/git_root/llama-recipes-main/data/对话到病历0219版本数据/train_dialogue2report_20240219_389_clear_prompt1.xlsx \
+            # --output_dir /fl-ift/med/hujunchao/models/train_dialogue2report_20240219_389_clear_prompt1 \
+            # --enable_fsdp \
+            # --low_cpu_fsdp \
+            # --batch_size_training 1 \
+            # --dist_checkpoint_root_folder checkpoints_qw \
+            # --dist_checkpoint_folder fine_tuned_qw2 \
+            # --num_epochs 5 \
+            # --gradient_accumulation_steps 8 \
+            # --fsdp_config.pure_bf16 \
+            # --batching_strategy padding \
+            # --lr 2e-5 \
+            # --seed 123456 \
+            # --gradient_clipping \
+            # --fsdp_cpu_offload \ "
+            #  ]
+            name: mpi-worker
+            resources:
+              limits:
+                nvidia.com/hostdev_1: 5
+                nvidia.com/gpu: 8 #必须填写，每个节点使用的 GPU 的数量
+            volumeMounts:
+            - mountPath: /fl-ift/med #必须填写，对应调试机的目录
+              name: jfs
+            - mountPath: /dev/shm
+              name: cache-volume
+          volumes:
+          - name: jfs
+            hostPath:
+              path: /fl-ift/med #必须填写，对应调试机的目录
+          - name: cache-volume
+            emptyDir:
+              medium: Memory

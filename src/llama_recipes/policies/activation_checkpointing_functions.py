@@ -8,7 +8,8 @@ from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
     CheckpointImpl,
     apply_activation_checkpointing,
 )
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+# from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+from llama_recipes.import_llama import LlamaDecoderLayer
 
 non_reentrant_wrapper = partial(
     checkpoint_wrapper,

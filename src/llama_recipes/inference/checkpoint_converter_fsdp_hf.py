@@ -8,7 +8,8 @@ import os
 import sys
 import yaml
 
-from transformers import LlamaTokenizer
+# from transformers import LlamaTokenizer
+from llama_recipes.import_llama import LlamaTokenizer
 
 from llama_recipes.inference.model_utils import  load_llama_from_config
 

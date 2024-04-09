@@ -1,0 +1,1 @@
+kubectl delete -f $1 # 传入yaml

@@ -24,7 +24,7 @@ from torch.distributed.checkpoint.default_planner import (
     DefaultSavePlanner,
     DefaultLoadPlanner,
 )
-
+import safetensors
 
 from torch.distributed.fsdp.fully_sharded_data_parallel import StateDictType
 import torch.distributed._shard.checkpoint as dist_cp
@@ -51,7 +51,7 @@ def load_model_sharded(model, rank, cfg):
         + "/"
         + cfg.dist_checkpoint_folder
         + "-"
-        + cfg.model_name
+        + cfg.model_name.strip('/').split('/')[-1]
     )
 
     load_dir = Path.cwd() / folder_name
@@ -91,7 +91,7 @@ def save_model_and_optimizer_sharded(model, rank, cfg,optim=None):
         + "/"
         + cfg.dist_checkpoint_folder
         + "-"
-        + cfg.model_name
+        + cfg.model_name.strip('/').split('/')[-1]
     )
 
     save_dir = Path.cwd() / folder_name
@@ -129,6 +129,8 @@ def save_model_checkpoint(
     cfg,
     epoch=1,
 ):
+    from .save_ckpt_shard import save_state_dict_shard
+    t0 = time.perf_counter()
     """saving model via rank0 cpu streaming and full_state_dict"""
 
     with FSDP.state_dict_type(
@@ -147,19 +149,21 @@ def save_model_checkpoint(
         + "/"
         + cfg.dist_checkpoint_folder
         + "-"
-        + cfg.model_name
+        + cfg.model_name.strip('/').split('/')[-1]
         )
         save_dir = Path.cwd() / folder_name
         save_dir.mkdir(parents=True, exist_ok=True)
-        save_name = cfg.model_name + "-" + str(epoch) + ".pt"
-        save_full_path = str(save_dir) + "/" + save_name
+        # save_name = cfg.model_name.strip('/').split('/')[-1] + "-" + str(epoch) + ".pt"
+        # save_name = 'model.safetensors'
+        # save_full_path = str(save_dir) + "/" + save_name
 
         # save model
-        torch.save(cpu_state, save_full_path)
+        # torch.save(cpu_state, save_full_path)
+        # safetensors.torch.save_file(cpu_state, save_full_path)
+        save_state_dict_shard(state_dict=cpu_state, save_directory=save_dir)
 
-        
-        print(f"model checkpoint saved for epoch {epoch} at {save_full_path}\n")
-      
+        t1 = time.perf_counter()
+        print(f"model checkpoint saved for epoch {epoch} at {save_dir}\n，save costs {t1-t0}s")
 
 
 def load_model_checkpoint(model, rank, cfg):
@@ -208,13 +212,13 @@ def save_optimizer_checkpoint(model, optimizer, rank, cfg, epoch=1):
         + "/"
         + cfg.dist_checkpoint_folder
         + "-"
-        + cfg.model_name
+        + cfg.model_name.strip('/').split('/')[-1]
         )
         save_dir = Path.cwd() / folder_name
         save_dir.mkdir(parents=True, exist_ok=True)
 
         opt_save_name = (
-            "optimizer" + "-" + cfg.model_name + "-" + str(epoch) + ".pt"
+            "optimizer" + "-" + cfg.model_name.strip('/').split('/')[-1] + "-" + str(epoch) + ".pt"
         )
         opt_save_full_path = save_dir / opt_save_name
 

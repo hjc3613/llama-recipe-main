@@ -9,7 +9,7 @@ class train_config:
     model_name: str="PATH/to/LLAMA/7B"
     enable_fsdp: bool=False
     low_cpu_fsdp: bool=False
-    run_validation: bool=True
+    run_validation: bool=False
     batch_size_training: int=4
     batching_strategy: str="packing" #alternative: padding
     context_length: int=4096
@@ -26,11 +26,13 @@ class train_config:
     mixed_precision: bool=True
     val_batch_size: int=1
     dataset = "samsum_dataset"
+    val_ds = None
     peft_method: str = "lora" # None , llama_adapter, prefix
     use_peft: bool=False
     output_dir: str = "PATH/to/save/PEFT/model"
     freeze_layers: bool = False
     num_freeze_layers: int = 1
+    freeze_strategy: int = 1 # 冻结层的策略，自定义，比如等于3时，只冻结3、6、9......层，层数从1开始计算，而非0
     quantization: bool = False
     one_gpu: bool = False
     save_model: bool = True
@@ -39,3 +41,5 @@ class train_config:
     save_optimizer: bool=False # will be used if using FSDP
     use_fast_kernels: bool = False # Enable using SDPA from PyTroch Accelerated Transformers, make use Flash Attention and Xformer memory-efficient kernels
     save_metrics: bool = False # saves training metrics to a json file for later plotting
+    scheduler: str = 'StepLR' # 'StepLR', 'LambdaLR'
+    warmup_steps: int = 0 # only for LambdaLR

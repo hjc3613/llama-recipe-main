@@ -3,7 +3,8 @@
 
 import functools
 
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+# from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+from llama_recipes.import_llama import LlamaDecoderLayer
 from torch.distributed.fsdp.wrap import (
     transformer_auto_wrap_policy,
     size_based_auto_wrap_policy,

@@ -6,9 +6,10 @@ from typing import List
 
 @dataclass
 class lora_config:
-     r: int=8
-     lora_alpha: int=32
-     target_modules: List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
+     r: int=64
+     lora_alpha: int=16
+     # target_modules: List[str] = field(default_factory=lambda: ["q_proj", "v_proj"]) # llama
+     target_modules: List[str] = field(default_factory=lambda: ["c_attn", "c_proj", "w1", "w2"]) # qw
      bias= "none"
      task_type: str= "CAUSAL_LM"
      lora_dropout: float=0.05
