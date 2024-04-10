@@ -4,6 +4,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export FT_MODEL_TYPE='qwdpo'
 base_model=dpo_14b_to_72b_spin_iter6-Qwen-14B-Base
 model_name=/fl-ift/med/hujunchao/models/${base_model}
+model_name=${model_name%/} # 删除结尾的/
 data_root=/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/DPO/
 file_name=dpo_14b_to_72b_spin_iter7.xlsx
 dataset=${data_root}/${file_name}
@@ -32,7 +33,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     # --optimizer PagedAdamW32bit \
     
 time python convert_fsdp_to_hf.py \
-    --fsdp_checkpoint_path  ${dist_checkpoint_root_folder}/${dist_checkpoint_folder}-${base_model} \
-    --consolidated_model_path /fl-ift/med/hujunchao/models/${dist_checkpoint_folder}-${base_model} \
+    --fsdp_checkpoint_path  ${dist_checkpoint_root_folder}/${dist_checkpoint_folder}-${model_name##*/} \
+    --consolidated_model_path /fl-ift/med/hujunchao/models/${dist_checkpoint_folder}-${model_name##*/} \
 
-cp /fl-ift/med/common/Qwen-14B-Base/*.py /fl-ift/med/hujunchao/models/${dist_checkpoint_folder}-${base_model}/
+cp /fl-ift/med/common/Qwen-14B-Base/*.py /fl-ift/med/hujunchao/models/${dist_checkpoint_folder}-${model_name##*/}/
