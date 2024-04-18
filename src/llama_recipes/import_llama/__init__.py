@@ -12,6 +12,7 @@ class LlamaType(Enum):
     qw2 = auto()
     llama = auto()
     qwdistillation = auto()
+    qworpo = auto()
 
 if model==LlamaType.qw.name:
     from llama_recipes.qwen.modeling_qwen import QWenBlock as LlamaDecoderLayer
@@ -26,6 +27,7 @@ elif model==LlamaType.qwdistillation.name:
 elif model==LlamaType.mixtral.name:
     from transformers import MixtralConfig as LlamaConfig
     from transformers import MixtralForCausalLM as LlamaForCausalLM
+    # LlamaForCausalLM.model.gradient_checkpointing = True
     from transformers import LlamaTokenizer
     from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer as LlamaDecoderLayer
 elif model==LlamaType.qw2.name:
@@ -38,6 +40,11 @@ elif model==LlamaType.qwdpo.name:
     from llama_recipes.qwen_dpo.modeling_qwen_dpo import QWenLMHeadModelDPO as LlamaForCausalLM
     from llama_recipes.qwen_dpo.tokenization_qwen import QWenTokenizer as LlamaTokenizer
     from llama_recipes.qwen_dpo.configuration_qwen import QWenConfig as LlamaConfig
+elif model==LlamaType.qworpo.name:
+    from llama_recipes.qwen_orpo.modeling_qwen_orpo import QWenBlock as LlamaDecoderLayer
+    from llama_recipes.qwen_orpo.modeling_qwen_orpo import QWenLMHeadModelORPO as LlamaForCausalLM
+    from llama_recipes.qwen_orpo.tokenization_qwen import QWenTokenizer as LlamaTokenizer
+    from llama_recipes.qwen_orpo.configuration_qwen import QWenConfig as LlamaConfig
 elif model == LlamaType.llama.name:
     from transformers import LlamaConfig, LlamaForCausalLM, LlamaTokenizer
     from transformers.models.llama.modeling_llama import LlamaDecoderLayer

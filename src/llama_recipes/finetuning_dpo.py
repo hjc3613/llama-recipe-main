@@ -86,6 +86,7 @@ def main(**kwargs):
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
+        print('local_rank: ', local_rank, 'rank: ', rank, 'word_size: ', world_size)
 
     if torch.distributed.is_initialized():
         torch.cuda.set_device(local_rank)
@@ -121,12 +122,20 @@ def main(**kwargs):
             
 
     else:
-        model = LlamaForCausalLM.from_pretrained(
-            train_config.model_name,
-            load_in_8bit=True if train_config.quantization else None,
-            device_map="auto" if train_config.quantization else None,
-            use_cache=use_cache,
-        )
+        from accelerate import infer_auto_device_map, init_empty_weights,load_checkpoint_and_dispatch
+        config = LlamaConfig.from_pretrained(train_config.model_name)
+        with init_empty_weights():
+            model = LlamaForCausalLM._from_config(config)
+            # device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=['10GB']*4)
+        model = load_checkpoint_and_dispatch(
+            model, checkpoint=train_config.model_name, device_map="auto", no_split_module_classes=model._no_split_modules
+)
+        # model = LlamaForCausalLM.from_pretrained(
+        #     train_config.model_name,
+        #     load_in_8bit=True if train_config.quantization else None,
+        #     device_map=device_map if train_config.quantization else None,
+        #     use_cache=use_cache,
+        # )
     disable_dropout(model)
     if train_config.enable_fsdp and train_config.use_fast_kernels:
         """
@@ -185,7 +194,8 @@ def main(**kwargs):
         if fsdp_config.fsdp_activation_checkpointing:
             apply_fsdp_checkpointing(model)
     elif not train_config.quantization and not train_config.enable_fsdp:
-        model.to("cuda")
+        # model.to("cuda")
+        pass
 
     dataset_train = DPODataset(train_config.dataset, tokenizer)
     if train_config.run_validation and train_config.val_ds:

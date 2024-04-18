@@ -14,7 +14,7 @@ from torch.distributed.fsdp import (
 )
 from torch.utils.data import DataLoader
 from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload
-from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
+from torch.optim.lr_scheduler import StepLR, LambdaLR
 from transformers import (
     # LlamaForCausalLM,
     # LlamaTokenizer,
@@ -51,10 +51,9 @@ from llama_recipes.utils.config_utils import (
 )
 from llama_recipes.utils.dataset_utils import get_preprocessed_dataset
 
-from llama_recipes.utils.train_utils import (
+from llama_recipes.utils.train_utils_orpo import (
     train,
     freeze_transformer_layers_for_qwen,
-    freeze_transformer_layers,
     setup,
     setup_environ_flags,
     clear_gpu_cache,
@@ -62,8 +61,13 @@ from llama_recipes.utils.train_utils import (
     get_policies
 )
 
-from llama_recipes.utils.supervised_dataset import SupervisedDataset
+from llama_recipes.utils.dpo_dataset import DPODataset, get_collate_fn
 
+def disable_dropout(model: torch.nn.Module):
+    """Disable dropout in a model."""
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0
 
 def main(**kwargs):
 
@@ -82,7 +86,6 @@ def main(**kwargs):
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
-        print('local_rank: ', local_rank, 'rank: ', rank, 'word_size: ', world_size)
 
     if torch.distributed.is_initialized():
         torch.cuda.set_device(local_rank)
@@ -108,12 +111,10 @@ def main(**kwargs):
                 train_config.model_name,
                 load_in_8bit=True if train_config.quantization else None,
                 device_map="auto" if train_config.quantization else None,
-                use_cache=use_cache,
-                attn_implementation="flash_attention_2",
-                torch_dtype=torch.bfloat16
+                use_cache=use_cache
             )
         else:
-            llama_config = LlamaConfig.from_pretrained(train_config.model_name, attn_implementation="flash_attention_2",torch_dtype=torch.bfloat16)
+            llama_config = LlamaConfig.from_pretrained(train_config.model_name)
             llama_config.use_cache = use_cache
             with torch.device("meta"):
                 model = LlamaForCausalLM(llama_config)
@@ -127,14 +128,14 @@ def main(**kwargs):
             # device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=['10GB']*4)
         model = load_checkpoint_and_dispatch(
             model, checkpoint=train_config.model_name, device_map="auto", no_split_module_classes=model._no_split_modules
-        )       
+)
         # model = LlamaForCausalLM.from_pretrained(
         #     train_config.model_name,
         #     load_in_8bit=True if train_config.quantization else None,
         #     device_map="auto" if train_config.quantization else None,
         #     use_cache=use_cache,
         # )
-    # model.model.gradient_checkpointing = True
+    # disable_dropout(model)
     if train_config.enable_fsdp and train_config.use_fast_kernels:
         """
         For FSDP and FSDP+PEFT, setting 'use_fast_kernels' will enable
@@ -144,7 +145,7 @@ def main(**kwargs):
         try:
             # from optimum.bettertransformer import BetterTransformer
             # model = BetterTransformer.transform(model)
-            pass
+            ...
         except ImportError:
             print("Module 'optimum' not found. Please install 'optimum' it before proceeding.")
 
@@ -171,11 +172,11 @@ def main(**kwargs):
     if train_config.enable_fsdp:
         if not train_config.use_peft and train_config.freeze_layers:
 
-            freeze_transformer_layers(model, train_config.num_freeze_layers)
-            # freeze_transformer_layers(model, train_config.num_freeze_layers, train_config.freeze_strategy)
+            freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
 
         mixed_precision_policy, wrapping_policy = get_policies(fsdp_config, rank)
         my_auto_wrapping_policy = fsdp_auto_wrap_policy(model, LlamaDecoderLayer)
+        
 
         model = FSDP(
             model,
@@ -192,43 +193,25 @@ def main(**kwargs):
         if fsdp_config.fsdp_activation_checkpointing:
             apply_fsdp_checkpointing(model)
     elif not train_config.quantization and not train_config.enable_fsdp:
-        model.to("cuda")
+        # model.to("cuda")
+        pass
 
-    # dataset_config = generate_dataset_config(train_config, kwargs)
-
-    #  # Load and preprocess the dataset for training and validation
-    # dataset_train = get_preprocessed_dataset(
-    #     tokenizer,
-    #     dataset_config,
-    #     split="train",
-    # )
-
-    # if not train_config.enable_fsdp or rank == 0:
-    #     print(f"--> Training Set Length = {len(dataset_train)}")
-
-    # dataset_val = get_preprocessed_dataset(
-    #     tokenizer,
-    #     dataset_config,
-    #     split="test",
-    # )
-    # if not train_config.enable_fsdp or rank == 0:
-    #         print(f"--> Validation Set Length = {len(dataset_val)}")
-
-    # if train_config.batching_strategy == "packing":
-    #     dataset_train = ConcatDataset(dataset_train, chunk_size=train_config.context_length)
-        
-    dataset_train = SupervisedDataset(train_config.dataset, tokenizer)
+    dataset_train = DPODataset(train_config.dataset, tokenizer)
     if train_config.run_validation and train_config.val_ds:
-        dataset_val = SupervisedDataset(train_config.val_ds, tokenizer)
+        dataset_val = DPODataset(train_config.val_ds, tokenizer)
         
     train_dl_kwargs = get_dataloader_kwargs(train_config, dataset_train, tokenizer, "train")
+    # train_dl_kwargs = {'batch_size':train_config.batch_size_training}
+    if 'collate_fn' in train_dl_kwargs:
+        train_dl_kwargs.pop('collate_fn')
 
     # Create DataLoaders for the training and validation dataset
     train_dataloader = DataLoader(
         dataset_train,
         num_workers=train_config.num_workers_dataloader,
         pin_memory=True,
-        **train_dl_kwargs,
+        collate_fn=get_collate_fn(tokenizer=tokenizer),
+        **train_dl_kwargs
     )
 
     eval_dataloader = None
@@ -237,11 +220,14 @@ def main(**kwargs):
             dataset_val = ConcatDataset(dataset_val, chunk_size=train_config.context_length)
 
         val_dl_kwargs = get_dataloader_kwargs(train_config, dataset_val, tokenizer, "val")
+        if 'collate_fn' in val_dl_kwargs:
+            val_dl_kwargs.pop('collate_fn')
 
-        eval_dataloader = torch.utils.data.DataLoader(
+        eval_dataloader = DataLoader(
             dataset_val,
             num_workers=train_config.num_workers_dataloader,
             pin_memory=True,
+            collate_fn=get_collate_fn(tokenizer=tokenizer)
             **val_dl_kwargs,
         )
 
@@ -256,8 +242,14 @@ def main(**kwargs):
             weight_decay=train_config.weight_decay,
         )
     elif fsdp_config.optimizer == 'PagedAdamW32bit':
-        from bitsandbytes.optim import PagedAdamW32bit, AdamW8bit
-        optimizer = AdamW8bit(
+        from bitsandbytes.optim import PagedAdamW32bit
+        optimizer = PagedAdamW32bit(
+            model.parameters(),
+            lr=train_config.lr,
+            weight_decay=train_config.weight_decay,
+        )
+    elif fsdp_config.optimizer == 'RMSprop':
+        optimizer = optim.RMSprop(
             model.parameters(),
             lr=train_config.lr,
             weight_decay=train_config.weight_decay,
@@ -268,16 +260,10 @@ def main(**kwargs):
             lr=train_config.lr,
             weight_decay=train_config.weight_decay,
         )
-        # optimizer = optim.AdamW(
-        #     [
-        #         {'params':[p for name, p in model.named_parameters() if 'wte' in name], 'lr':train_config.lr / 100},
-        #         {'params':[p for name, p in model.named_parameters() if 'wte' not in name], 'lr':train_config.lr},
-        #     ],
-        #     weight_decay=train_config.weight_decay,
-        # )
     print('optimizer type: ', type(optimizer))
-    scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
-    print('scheduler type: ', type(scheduler))
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=train_config.gamma)
+    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: min(1.0, (step + 1) / (train_config.warmup_steps + 1)))
+    print('schduler type: ', type(scheduler))
 
     # Start the training process
     results = train(

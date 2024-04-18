@@ -30,6 +30,7 @@ def load_llama_from_config(config_path):
     #     model = LlamaForCausalLM(model_config)
     # model = LlamaForCausalLM(config=model_config)
     model = LlamaForCausalLM.from_pretrained(config_path, device_map='cpu')
+    model.bfloat16()
     return model
     
     

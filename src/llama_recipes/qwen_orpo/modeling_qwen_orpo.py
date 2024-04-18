@@ -795,7 +795,7 @@ class QWenModel(QWenPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ):
-        # self.gradient_checkpointing = True
+        self.gradient_checkpointing = True
         output_attentions = (
             output_attentions
             if output_attentions is not None
@@ -1346,33 +1346,46 @@ class QWenLMHeadModelORPO(QWenLMHeadModel):
         # reference_chosen_logps: torch.FloatTensor = None,
         # reference_rejected_logps: torch.FloatTensor = None,
         index: torch.LongTensor = None,
-        only_reference = False
+        # only_reference = False
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+        # dataset中将正负样本拼接，此处再分离，单个计算以节省显存
+        # batchsize = concatenated_input_ids.shape[0]
+        # chosen_input_ids, reject_input_ids = concatenated_input_ids.split(batchsize//2)
+        # chosen_attention_mask, reject_attention_mask = concatenated_attention_mask.split(batchsize//2)
+        # chosen_labels, reject_labels = concatenated_labels.split(batchsize//2)
+        # res_chosen:CausalLMOutputWithPast = super().forward(
+        #     input_ids=chosen_input_ids,
+        #     attention_mask=chosen_attention_mask,
+        #     labels=chosen_labels
+        # )
+        # chosen_logits = res_chosen.logits.to(torch.float32)
+        # chosen_logps = _get_batch_logps(chosen_logits, chosen_labels.to(chosen_logits.device), average_log_prob=True)
+        # chosen_logits = None
+        # res_chosen.logits = None
+        # res_reject:CausalLMOutputWithPast = super().forward(
+        #     input_ids=reject_input_ids,
+        #     attention_mask=reject_attention_mask,
+        #     labels=reject_labels
+        # )
+        # reject_logits = res_reject.logits.to(torch.float32)
+        # reject_logps = _get_batch_logps(reject_logits, reject_labels.to(reject_logits.device), average_log_prob=True)
+        # reject_logits = None
+        # res_reject.logits = None
         res:CausalLMOutputWithPast = super().forward(
             input_ids=concatenated_input_ids,
-            attention_mask=concatenated_attention_mask
+            attention_mask=concatenated_attention_mask,
+            labels=concatenated_labels
         )
         all_logits = res.logits.to(torch.float32)
-        all_logps = _get_batch_logps(all_logits, concatenated_labels.to(all_logits.device), average_log_prob=False)
-        chosen_logps, rejected_logps = all_logps.split(all_logps.shape[0]//2)
-        # if only_reference:
-        #     return torch.stack([chosen_logps, rejected_logps], dim=1)
+        all_logps = _get_batch_logps(all_logits, concatenated_labels.to(all_logits.device), average_log_prob=True)
+        # chosen_logps, rejected_logps = all_logps.split(all_logps.shape[0]//2)
         
-        # reference_logps = self.read_reference_score(indexes=index)
-        # reference_chosen_logps, reference_rejected_logps = reference_logps.split(1, dim=1)
-        # reference_chosen_logps, reference_rejected_logps = torch.squeeze(reference_chosen_logps), torch.squeeze(reference_rejected_logps)
-        
-        # beta: 0.1 ~ 0.5,越小代表越忽略参考模型, label_smoothing=0表示原始DPO
-        loss_kwargs = {'beta': 0.1 , 'reference_free': False, 'label_smoothing': 0, 'ipo': False}
-        loss = preference_loss(
-            policy_chosen_logps=chosen_logps,
-            policy_rejected_logps=rejected_logps,
-            reference_chosen_logps=reference_chosen_logps.to(all_logps.device),
-            reference_rejected_logps=reference_rejected_logps.to(all_logps.device),
-            **loss_kwargs
-        )
-        res.loss = loss[0].mean()
-        return res
+        # log_odds = (chosen_logps - reject_logps) - (torch.log(1-torch.exp(chosen_logps)) - torch.log(1-torch.exp(reject_logps)))
+        # sig_ratio = torch.nn.functional.sigmoid(log_odds)
+        # ratio = -torch.log(sig_ratio).mean()
+        # loss = res_chosen.loss+0.1*ratio
+        # res_chosen.loss = loss
+        return res.loss, all_logps
 
 class RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, base=10000):

@@ -57,6 +57,8 @@ class SupervisedDataset(Dataset):
             targets = [f"{example['output']}{tokenizer.eos_token}" for example in list_data_dict]
         elif 'target' in list_data_dict[0]:
             targets = [f"{example['target']}{tokenizer.eos_token}" for example in list_data_dict]
+        elif 'label' in list_data_dict[0]:
+            targets = [f"{example['label']}{tokenizer.eos_token}" for example in list_data_dict]
 
         logging.warning("Tokenizing inputs... This may take some time...")
         data_dict = self.preprocess(sources, targets, tokenizer)

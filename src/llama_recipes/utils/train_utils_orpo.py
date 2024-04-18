@@ -98,7 +98,18 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                     else:
                         batch[key] = batch[key].to(model.device)
                 with autocast():
-                    loss = model(**batch).loss
+                    batchsize = batch['index'].shape[0]
+                    batch_chosen = {k:v[:batchsize, ...] for k,v in batch.items() if k!='index'}
+                    batch_reject = {k:v[batchsize:, ...] for k,v in batch.items() if k!='index'}
+                    batch_chosen['index'] = batch['index']
+                    batch_reject['index'] = batch['index']
+                    chosen_loss, chosen_logps = model(**batch_chosen)
+                    reject_loss, reject_logps = model(**batch_reject)
+                    log_odds = (chosen_logps - reject_logps) - (torch.log(1-torch.exp(chosen_logps)) - torch.log(1-torch.exp(reject_logps)))
+                    sig_ratio = torch.nn.functional.sigmoid(log_odds)
+                    ratio = -torch.log(sig_ratio).mean()
+                    loss = ratio
+                    loss
                 loss = loss / gradient_accumulation_steps
                 if train_config.save_metrics:
                     train_step_loss.append(loss.detach().float().item())
