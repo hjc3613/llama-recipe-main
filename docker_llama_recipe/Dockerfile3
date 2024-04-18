@@ -1,0 +1,58 @@
+#来自于那个基础镜像
+  
+FROM nvcr.io/nvidia/pytorch:23.10-py3
+  
+#安装ssh服务
+RUN apt-get update && apt-get install -y openssh-server
+ 
+  
+#拷贝pdsh-2.2到容器当中（位于node18的/fl-ift/public目录下）
+COPY pdsh-2.29 .
+  
+#源码编译pdsh
+RUN ./configure --with-ssh --with-rsh --with-mrsh --with-mqshell --with-dshgroups && make && make install
+
+RUN apt update \
+    && apt install -y vim wget htop git  language-pack-zh-hans openssh-server sudo \
+    && pip install deepspeed==0.10.0 transformers  datasets evaluate accelerate psutil gradio icetk openpyxl tensorboard cpm_kernels loguru pybind11 tiktoken -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip uninstall -y transformer-engine
+
+  
+#使用pip安装Python包
+RUN pip install flash-attn --no-build-isolation  -i https://pypi.tuna.tsinghua.edu.cn/simple
+  
+# 此处应按照具体情况进行修改：填入使用者host机器的uid、gid、组名、用户名  
+  
+RUN groupadd -f -g 2005 nlp && groupadd -f -g 2031 hujunchao && useradd -m -u 2031 -g hujunchao -G nlp -s /bin/bash hujunchao \
+    && echo 'hujunchao ALL=(ALL) /usr/bin/apt' >> /etc/sudoers && echo "hujunchao:unisound#atlas..!" | chpasswd
+  
+#创建sshd服务目录
+RUN mkdir /opt/work/.ssh -p
+  
+#sshd_config配置文件到/opt/work/.ssh
+COPY  sshd_config /opt/work/.ssh
+  
+RUN  chmod 0600 /opt/work/.ssh/sshd_config
+  
+#创建秘钥
+  
+RUN ssh-keygen -t dsa -f /opt/work/.ssh/ssh_host_dsa_key -N ''
+  
+RUN ssh-keygen -t rsa -f /opt/work/.ssh/ssh_host_rsa_key -N ''
+  
+#给/opt/work/目录授权当前的用户和属组
+  
+RUN chown hujunchao:nlp /opt/work/ -R
+  
+#指令启动sshd服务
+  
+CMD ["/usr/sbin/sshd", "-f", "/opt/work/.ssh/sshd_config","-D"]
+ 
+#容器用户
+  
+USER hujunchao
+ 
+  
+#暴露2222
+  
+EXPOSE 2222
