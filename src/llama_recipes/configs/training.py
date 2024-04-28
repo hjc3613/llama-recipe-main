@@ -26,6 +26,7 @@ class train_config:
     mixed_precision: bool=True
     val_batch_size: int=1
     dataset = "samsum_dataset"
+    dataset_format: str='text'
     val_ds = None
     peft_method: str = "lora" # None , llama_adapter, prefix
     use_peft: bool=False
@@ -42,4 +43,9 @@ class train_config:
     use_fast_kernels: bool = False # Enable using SDPA from PyTroch Accelerated Transformers, make use Flash Attention and Xformer memory-efficient kernels
     save_metrics: bool = False # saves training metrics to a json file for later plotting
     scheduler: str = 'StepLR' # 'StepLR', 'LambdaLR'
-    warmup_steps: int = 0 # only for LambdaLR
+    warmup_steps: int = 0 # 
+    warmup_ratio: float = 0.
+    max_train_step: int=0
+    max_eval_step: int=0
+    save_checkpoint_every_step: int = 0
+    update_lr_every_step: int = 0

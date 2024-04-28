@@ -15,6 +15,7 @@ from torch.distributed.fsdp import (
 from torch.utils.data import DataLoader
 from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
+from transformers.optimization import get_cosine_schedule_with_warmup
 from transformers import (
     # LlamaForCausalLM,
     # LlamaTokenizer,
@@ -22,6 +23,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     AutoConfig,
+    DataCollatorForLanguageModeling,
 )
 # from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 
@@ -43,6 +45,7 @@ from llama_recipes.data.concatenator import ConcatDataset
 from llama_recipes.policies import AnyPrecisionAdamW, apply_fsdp_checkpointing
 
 from llama_recipes.utils import fsdp_auto_wrap_policy
+from llama_recipes.utils.pretrained_dataset import build_train_valid_test_datasets
 from llama_recipes.utils.config_utils import (
     update_config,
     generate_peft_config,
@@ -55,6 +58,7 @@ from llama_recipes.utils.train_utils import (
     train,
     freeze_transformer_layers_for_qwen,
     freeze_transformer_layers,
+    active_transformer_layers_for_qwen,
     setup,
     setup_environ_flags,
     clear_gpu_cache,
@@ -64,6 +68,28 @@ from llama_recipes.utils.train_utils import (
 
 from llama_recipes.utils.supervised_dataset import SupervisedDataset
 
+def get_train_val_dataset(train_config, tokenizer):
+    if train_config.dataset_format=='bin':
+        dataset_train, _, _ = build_train_valid_test_datasets(
+            train_config.dataset, 
+            splits_string='100,0,0', 
+            seq_length=train_config.context_length
+        )
+        if train_config.run_validation and train_config.val_ds:
+            dataset_val, _, _ = build_train_valid_test_datasets(
+                train_config.val_ds, 
+                splits_string='100,0,0', 
+                seq_length=train_config.context_length
+            )
+        else:
+            dataset_val = None
+    else:
+        dataset_train = SupervisedDataset(train_config.dataset, tokenizer, max_length=train_config.context_length)
+        if train_config.run_validation and train_config.val_ds:
+            dataset_val = SupervisedDataset(train_config.val_ds, tokenizer, max_length=train_config.context_length)
+        else:
+            dataset_val = None
+    return dataset_train, dataset_val
 
 def main(**kwargs):
 
@@ -109,11 +135,16 @@ def main(**kwargs):
                 load_in_8bit=True if train_config.quantization else None,
                 device_map="auto" if train_config.quantization else None,
                 use_cache=use_cache,
-                attn_implementation="flash_attention_2",
+                # attn_implementation="flash_attention_2",
+                use_flash_attn=True,
                 torch_dtype=torch.bfloat16
             )
         else:
-            llama_config = LlamaConfig.from_pretrained(train_config.model_name, attn_implementation="flash_attention_2",torch_dtype=torch.bfloat16)
+            llama_config = LlamaConfig.from_pretrained(
+                train_config.model_name, 
+                # attn_implementation="flash_attention_2",
+                use_flash_attn=True,
+                torch_dtype=torch.bfloat16)
             llama_config.use_cache = use_cache
             with torch.device("meta"):
                 model = LlamaForCausalLM(llama_config)
@@ -171,8 +202,9 @@ def main(**kwargs):
     if train_config.enable_fsdp:
         if not train_config.use_peft and train_config.freeze_layers:
 
-            freeze_transformer_layers(model, train_config.num_freeze_layers)
-            # freeze_transformer_layers(model, train_config.num_freeze_layers, train_config.freeze_strategy)
+            # freeze_transformer_layers(model, train_config.num_freeze_layers)
+            # freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
+            active_transformer_layers_for_qwen(model, train_config.freeze_strategy)
 
         mixed_precision_policy, wrapping_policy = get_policies(fsdp_config, rank)
         my_auto_wrapping_policy = fsdp_auto_wrap_policy(model, LlamaDecoderLayer)
@@ -216,10 +248,12 @@ def main(**kwargs):
 
     # if train_config.batching_strategy == "packing":
     #     dataset_train = ConcatDataset(dataset_train, chunk_size=train_config.context_length)
-        
-    dataset_train = SupervisedDataset(train_config.dataset, tokenizer)
-    if train_config.run_validation and train_config.val_ds:
-        dataset_val = SupervisedDataset(train_config.val_ds, tokenizer)
+    
+    # 加载数据
+    # dataset_train = SupervisedDataset(train_config.dataset, tokenizer, max_length=train_config.context_length)
+    # if train_config.run_validation and train_config.val_ds:
+    #     dataset_val = SupervisedDataset(train_config.val_ds, tokenizer, max_length=train_config.context_length)
+    dataset_train, dataset_val = get_train_val_dataset(train_config, tokenizer)
         
     train_dl_kwargs = get_dataloader_kwargs(train_config, dataset_train, tokenizer, "train")
 
@@ -244,7 +278,7 @@ def main(**kwargs):
             pin_memory=True,
             **val_dl_kwargs,
         )
-
+    
     # Initialize the optimizer and learning rate scheduler
     if fsdp_config.pure_bf16 and fsdp_config.optimizer == "anyprecision":
         optimizer = AnyPrecisionAdamW(
@@ -276,7 +310,23 @@ def main(**kwargs):
         #     weight_decay=train_config.weight_decay,
         # )
     print('optimizer type: ', type(optimizer))
-    scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
+    # scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
+    if train_config.max_train_step>0:
+        total_steps = min(len(train_dataloader), train_config.max_train_step)
+    else:
+        total_steps = len(train_dataloader)
+    if train_config.warmup_steps > 0 and train_config.warmup_ratio > 0:
+        warmup_steps = min(train_config.warmup_steps, int(train_config.warmup_ratio*total_steps))
+        print(f'warmup_steps: min({train_config.warmup_steps} and {train_config.warmup_ratio*total_steps})=',warmup_steps)
+    elif train_config.warmup_ratio > 0:
+        warmup_steps = int(train_config.warmup_ratio*total_steps)
+        print(f'warmup_steps {train_config.warmup_ratio}*{total_steps}=', warmup_steps)
+    elif train_config.warmup_steps > 0:
+        warmup_steps = train_config.warmup_steps
+    else:
+        warmup_steps=0
+    print('warmup_steps: ', warmup_steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer, num_training_steps=total_steps, num_warmup_steps=warmup_steps)
     print('scheduler type: ', type(scheduler))
 
     # Start the training process

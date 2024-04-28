@@ -80,11 +80,16 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
     checkpoint_times = []
     results = {}
     best_val_loss = float("inf")
+    total_train_steps = 0
+    max_steps_reached = False  # Flag to indicate max training steps reached
     #saving the training params including fsdp setting for reference.
     if train_config.enable_fsdp and not train_config.use_peft:
-        save_train_params(train_config, fsdp_config, rank)
+        save_train_params(train_config, fsdp_config, rank, step='final')
         
     for epoch in range(train_config.num_epochs):
+        # stop when the maximum number of training steps is reached
+        if max_steps_reached:
+            break
         epoch_start_time = time.perf_counter()
         with MemoryTrace() as memtrace:  # track the memory usage
             model.train()
@@ -92,6 +97,11 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
             total_length = len(train_dataloader)//gradient_accumulation_steps
             pbar = tqdm(colour="blue", desc=f"Training Epoch: {epoch+1}", total=total_length, dynamic_ncols=True)
             for step, batch in enumerate(train_dataloader):
+                if train_config.max_train_step > 0 and total_train_steps > train_config.max_train_step:
+                    max_steps_reached = True
+                    if not train_config.enable_fsdp or local_rank==0:
+                        print("max training steps reached, stopping training, total_train_steps: ", total_train_steps-1)
+                    break
                 for key in batch.keys():
                     if train_config.enable_fsdp:
                         batch[key] = batch[key].to(local_rank)
@@ -118,6 +128,7 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                         scaler.update()
                         optimizer.zero_grad()
                         pbar.update(1)
+                        total_train_steps += 1
                 else:
                     # regular backpropagation when fp16 is not used
                     loss.backward()
@@ -130,8 +141,18 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                         optimizer.step()
                         optimizer.zero_grad()
                         pbar.update(1)
+                        total_train_steps += 1
 
-                pbar.set_description(f"Training Epoch: {epoch+1}/{train_config.num_epochs}, step {step}/{len(train_dataloader)} completed (loss: {loss.detach().float()})")
+                if total_train_steps>0 and train_config.update_lr_every_step>0 and total_train_steps % train_config.update_lr_every_step == 0:
+                    lr_scheduler.step()
+
+                if total_train_steps>0 and train_config.save_checkpoint_every_step>0 and total_train_steps % train_config.save_checkpoint_every_step == 0:
+                    checkpoint_end_time = save_ckpt(train_config, model, rank, fsdp_config, optimizer, epoch, total_train_steps)
+                    save_train_params(train_config, fsdp_config, rank, step=total_train_steps)
+                    checkpoint_times.append(checkpoint_end_time)
+
+                    
+                pbar.set_description(f"Training Epoch: {epoch+1}/{train_config.num_epochs}, step {step}/{len(train_dataloader)} completed (loss: {loss.detach().float()}) lr:{lr_scheduler.get_lr()}")
 
                 if train_config.save_metrics:
                     save_to_json(metrics_filename, train_step_loss, train_loss, train_step_perplexity, train_prep, val_step_loss, val_loss, val_step_perplexity, val_prep)
@@ -185,6 +206,9 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
             val_loss.append(float(best_val_loss))
             val_prep.append(float(eval_ppl))
         if train_config.save_model:
+            checkpoint_end_time = save_ckpt(train_config, model, rank, fsdp_config, optimizer, epoch, step='final')
+            save_train_params(train_config, fsdp_config, rank, step='final')
+            '''
             checkpoint_start_time = time.perf_counter()
             if train_config.enable_fsdp:
                 dist.barrier()
@@ -226,6 +250,7 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
             if train_config.enable_fsdp:
                 dist.barrier()
             checkpoint_end_time = time.perf_counter() - checkpoint_start_time
+            '''
             checkpoint_times.append(checkpoint_end_time)
         if train_config.enable_fsdp:
             if rank==0:
@@ -258,8 +283,8 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
         results["metrics_filename"] = metrics_filename
 
     #saving the training params including fsdp setting for reference.
-    if train_config.enable_fsdp and not train_config.use_peft:
-        save_train_params(train_config, fsdp_config, rank)
+    # if train_config.enable_fsdp and not train_config.use_peft:
+    #     save_train_params(train_config, fsdp_config, rank)
 
     return results
 
@@ -324,6 +349,50 @@ def evaluation(model,train_config, eval_dataloader, local_rank, tokenizer):
         
     return eval_ppl, eval_epoch_loss, val_step_loss, val_step_perplexity
 
+def save_ckpt(train_config, model, rank, fsdp_config, optimizer, epoch, step):
+    checkpoint_start_time = time.perf_counter()
+    if train_config.enable_fsdp:
+        dist.barrier()
+    if train_config.use_peft:
+        if train_config.enable_fsdp:
+            if rank==0:
+                print(f"we are about to save the PEFT modules")
+        else:
+            print(f"we are about to save the PEFT modules")
+        model.save_pretrained(train_config.output_dir)
+        if train_config.enable_fsdp:
+            if rank==0:
+                print(f"PEFT modules are saved in {train_config.output_dir} directory")
+        else:
+            print(f"PEFT modules are saved in {train_config.output_dir} directory")
+
+    else:
+        if not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.FULL_STATE_DICT:
+
+            save_model_checkpoint(
+                model, optimizer, rank, train_config, epoch=epoch
+            )
+        elif not train_config.use_peft and fsdp_config.checkpoint_type == StateDictType.SHARDED_STATE_DICT:
+            print(" Saving the FSDP model checkpoints using SHARDED_STATE_DICT")
+            print("=====================================================")
+
+            save_model_and_optimizer_sharded(model, rank, train_config, step=step)
+            if train_config.save_optimizer:
+                save_model_and_optimizer_sharded(model, rank, train_config, optim=optimizer, step=step)
+                print(" Saving the FSDP model checkpoints and optimizer using SHARDED_STATE_DICT")
+                print("=====================================================")
+
+        if not train_config.use_peft and  train_config.save_optimizer:
+            save_optimizer_checkpoint(
+                model, optimizer, rank, train_config, epoch=epoch
+            )
+            print(" Saving the FSDP model checkpoints and optimizer using FULL_STATE_DICT")
+            print("=====================================================")
+    if train_config.enable_fsdp:
+        dist.barrier()
+    checkpoint_end_time = time.perf_counter() - checkpoint_start_time
+    return checkpoint_end_time
+
 def freeze_transformer_layers(model, num_layer):
     for i, layer in enumerate(model.model.layers):
             if i < num_layer:
@@ -333,6 +402,12 @@ def freeze_transformer_layers(model, num_layer):
 def freeze_transformer_layers_for_qwen(model:LlamaForCausalLM, num_layer:int, strategy:int):
     for i, layer in enumerate(model.transformer.h, start=1):
             if i < num_layer and i%strategy==0: # 冻结num_layer层以下且是strategy倍数的层
+                for param in layer.parameters():
+                    param.requires_grad = False
+
+def active_transformer_layers_for_qwen(model:LlamaForCausalLM, strategy:int):
+    for i, layer in enumerate(model.transformer.h, start=1):
+            if not i%strategy==0: # 激活strategy倍数的层，其它层数冻结
                 for param in layer.parameters():
                     param.requires_grad = False
 
@@ -429,7 +504,7 @@ def get_policies(cfg, rank):
     wrapping_policy = get_llama_wrapper()
     return mixed_precision_policy, wrapping_policy
 
-def save_train_params(train_config, fsdp_config, rank):
+def save_train_params(train_config, fsdp_config, rank, step=None):
     """
     This function saves the train_config and FSDP config into a train_params.yaml.
     This will be used by converter script in the inference folder to fetch the HF model name or path.
@@ -448,6 +523,8 @@ def save_train_params(train_config, fsdp_config, rank):
     + train_config.dist_checkpoint_folder
     + "-"
     + train_config.model_name.strip('/').split('/')[-1]
+    +'-'
+    +f'step{step}'
     )
 
     save_dir = Path.cwd() / folder_name

@@ -15,12 +15,12 @@ def disable_dropout(model: torch.nn.Module):
     for module in model.modules():
         if isinstance(module, torch.nn.Dropout):
             module.p = 0
-model_path = '/fl-ift/med/hujunchao/models/dpo_14b_to_72b_spin_iter6-Qwen-14B-Base'
+model_path = '/fl-ift/med/jianglei/project/llama-recipes-main/src/checkpoints_dia2abstract2record_0410_348x2_base_17key_claer_72B_35layer_epoch6_b8_2e5_gc0_wd0_seed12345/hf_3'
 model = QWenLMHeadModelDPO.from_pretrained(model_path, device_map='auto', use_flash_attn=False)
 model = model.eval()
 disable_dropout(model)
 tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-dataset_file = f"/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/DPO/dpo_14b_to_72b_spin_iter7.xlsx"
+dataset_file = f"/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/dialogue2record_orpo/orpo_train.xlsx"
 # dataset_file = f"/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/DPO/test.xlsx"
 dataset = DPODataset(dataset_file, tokenizer=tokenizer, prompt_col='input', chosen_col='chosen', reject_col='reject')
 batch_size=1 

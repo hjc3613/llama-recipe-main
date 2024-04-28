@@ -13,6 +13,11 @@ import copy
 import json
 import io
 import pandas as pd
+from tqdm import tqdm
+import time
+import os
+from torch.multiprocessing import Pool, Process, Manager
+from functools import partial
 IGNORE_INDEX = -100
 
 def _make_r_io_base(f, mode: str):
@@ -23,7 +28,7 @@ def _make_r_io_base(f, mode: str):
 def jload_v2(f, mode="r"):
     f = _make_r_io_base(f, mode)
     jdict = []
-    for line in f:
+    for line in tqdm(f, desc='load dataset...'):
         jdict.append(json.loads(line))
     f.close
     return jdict
@@ -34,16 +39,34 @@ def xlsload(f):
     return result
 
 def load_file(file:str):
-    if file.endswith('.jsonl'):
+    if file.endswith('.jsonl') or file.endswith('.txt'):
         return jload_v2(file)
     elif file.endswith('.xlsx'):
         return xlsload(file)
+    elif os.path.isdir(file):
+        result = []
+        for sub_file in os.listdir(file):
+            result.extend(load_file(os.path.join(file, sub_file)))
+        return result
+
+
 
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
-    def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, index=False, seq_len=False):
+    def __init__(self, 
+                 data_path: str, 
+                 tokenizer: transformers.PreTrainedTokenizer, 
+                 index=False, 
+                 seq_len=False, 
+                 padding='longest', 
+                 max_length=8192,
+                 num_process=1
+                 ):
         super(SupervisedDataset, self).__init__()
+        self.padding = padding
+        self.max_length = max_length
+        self.num_process = num_process
         logging.warning("Loading data...")
         list_data_dict = load_file(data_path)
 
@@ -74,16 +97,44 @@ class SupervisedDataset(Dataset):
 
     def _tokenize_fn(self, strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
         """Tokenize a list of strings."""
-        tokenized_list = [
-            tokenizer(
-                text,
-                return_tensors="pt",
-                padding="longest",
-                max_length=tokenizer.model_max_length,
-                truncation=True,
-            )
-            for text in strings
-        ]
+        if self.num_process == 1:
+            start = time.time()
+            tokenized_list = [
+                tokenizer(
+                    text,
+                    return_tensors="pt",
+                    padding=self.padding,
+                    max_length=min(tokenizer.model_max_length, self.max_length),
+                    truncation=True,
+                )
+                for text in tqdm(strings)
+            ]
+            end = time.time()
+            print(f'tokenize cost {end-start}s under {self.num_process} cores')
+        else:
+            # manager = Manager()
+            # tokenized_list = manager.list()
+            start = time.time()
+            partial_tokenizer = partial(tokenizer, return_tensors='pt', padding=self.padding, max_length=min(tokenizer.model_max_length, self.max_length), truncation=True)
+            with Pool(self.num_process) as pool:
+                tokenized_list = pool.map(partial_tokenizer, strings)
+            end = time.time()
+            print(f'tokenize cost {end-start}s under {self.num_process} cores')
+            # chunk_size = len(strings)//self.num_process
+            # def chunks(lst, n):
+            #     """Yield successive n-sized chunks from lst."""
+            #     for i in range(0, len(lst), n):
+            #         yield lst[i:i + n]
+            # def target(chunk, tokenized_list):
+            #     tmp = [partial_tokenizer(text) for text in chunk]
+            #     tokenized_list.extend(tmp)
+            # sub_strings = list(chunks(strings, chunk_size))
+            # processes = [Process(target=target, args=(chunk, tokenized_list)) for chunk in sub_strings]
+            # [i.start() for i in processes]
+            # [i.join() for i in processes]
+            # tokenized_list = list(tokenized_list)
+            # tokenized_list
+
         input_ids = labels = [tokenized.input_ids[0] for tokenized in tokenized_list]
         input_ids_lens = labels_lens = [
             tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item() for tokenized in tokenized_list
