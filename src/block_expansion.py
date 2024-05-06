@@ -52,6 +52,20 @@ def main():
     torch.save(output, args.output_path)
 
 @torch.no_grad()
+def generate(text,tokenizer, model):
+    encoded_input = tokenizer(text, return_tensors='pt', add_special_tokens=True)
+    encoded_input = encoded_input.to(model.device)
+    generated_ids = model.generate(
+    **encoded_input,
+    max_new_tokens=128,
+    do_sample=False,
+    pad_token_id=tokenizer.eos_token_id
+    )
+    decoded_output = tokenizer.decode(generated_ids[0][len(encoded_input['input_ids'][0]):]).replace('</s>', '').replace('<s>', '')
+    decoded_output = decoded_output.replace('<|endoftext|>', '').replace('<|im_end|>', '')
+    return decoded_output
+
+@torch.no_grad()
 def main2():
     parser = argparse.ArgumentParser(description="Receive deepen model's args")
     parser.add_argument("--model_path", default='/fl-ift/med/common/Qwen-14B-Base', type=str, help="original model path")
@@ -61,23 +75,27 @@ def main2():
     # Parse the arguments
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    qw = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.float16, trust_remote_code=True)
-    qw2 = AutoModelForCausalLM.from_pretrained('/fl-ift/med/hujunchao/models/qw_pro', torch_dtype=torch.float16, trust_remote_code=True)
-    h = qw.transformer.h
-    new_h = nn.ModuleList()
-    for idx, model in enumerate(h, start=1):
-        if idx % args.group_size == 0:
-            model_expand = deepcopy(model)
-            model_expand.attn.c_proj.weight.zero_()
-            model_expand.mlp.c_proj.weight.zero_()
+    qw = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.float16, trust_remote_code=True, device_map='auto')
+    print('before expand: ', generate('hello, what is your name?', tokenizer=tokenizer, model=qw))
+    qw2 = AutoModelForCausalLM.from_pretrained('/fl-ift/med/common/Qwen-14B-Base_pro2', torch_dtype=torch.float16, trust_remote_code=True, device_map='auto')
+    print('after expand: ', generate('hello, what is your name?', tokenizer=tokenizer, model=qw2))
+    
+    # h = qw.transformer.h
+    # new_h = nn.ModuleList()
+    # for idx, model in enumerate(h, start=1):
+    #     if idx % args.group_size == 0:
+    #         model_expand = deepcopy(model)
+    #         model_expand.attn.c_proj.weight.zero_()
+    #         model_expand.mlp.c_proj.weight.zero_()
             
-            new_h.append(model)
-            new_h.append(model_expand)
-        else:
-            new_h.append(model)
-    qw.transformer.h = new_h
-    qw.save_pretrained(args.model_path+'_pro')
-    tokenizer.save_pretrained(args.model_path+'_pro')
+    #         new_h.append(model)
+    #         new_h.append(model_expand)
+    #     else:
+    #         new_h.append(model)
+    # qw.transformer.h = new_h
+    
+    # qw.save_pretrained(args.model_path+'_pro2')
+    # tokenizer.save_pretrained(args.model_path+'_pro2')
 
 if __name__ == "__main__":
     main2()

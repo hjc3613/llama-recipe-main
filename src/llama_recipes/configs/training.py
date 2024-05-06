@@ -42,7 +42,7 @@ class train_config:
     save_optimizer: bool=False # will be used if using FSDP
     use_fast_kernels: bool = False # Enable using SDPA from PyTroch Accelerated Transformers, make use Flash Attention and Xformer memory-efficient kernels
     save_metrics: bool = False # saves training metrics to a json file for later plotting
-    scheduler: str = 'StepLR' # 'StepLR', 'LambdaLR'
+    scheduler: str = 'StepLR' # 'StepLR', or transformers scheduler(linear, cosine, cosine_with_restarts, polynomial, constant, constant_with_warmup, inverse_sqrt, reduce_lr_on_plateau)
     warmup_steps: int = 0 # 
     warmup_ratio: float = 0.
     max_train_step: int=0

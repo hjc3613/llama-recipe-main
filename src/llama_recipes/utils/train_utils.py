@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from pkg_resources import packaging
 from datetime import datetime
-
+# from torch.utils.tensorboard import SummaryWriter
 
 import torch
 import torch.cuda.nccl as nccl
@@ -63,14 +63,14 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
     
 
     autocast = torch.cuda.amp.autocast if train_config.use_fp16 else nullcontext
-
+    # writer = SummaryWriter()
     train_prep = []
     train_loss = []
     val_prep = []
     val_loss =[]
 
     if train_config.save_metrics:
-        metrics_filename = f"{train_config.output_dir}/metrics_data_{local_rank}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+        metrics_filename = f"{train_config.dist_checkpoint_root_folder}/metrics_data_{local_rank}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
         train_step_perplexity = []
         train_step_loss = []
         val_step_loss = []
@@ -113,6 +113,7 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                 if train_config.save_metrics:
                     train_step_loss.append(loss.detach().float().item())
                     train_step_perplexity.append(float(torch.exp(loss.detach().float())))
+                # print(json.dumps({'train_loss':loss.detach().float().item(), 'train_ppl':float(torch.exp(loss.detach().float()))}))
                 total_loss += loss.detach().float()
                 if train_config.use_fp16:
                     # if fp16 is enabled, use gradient scaler to handle gradient update
@@ -129,6 +130,8 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                         optimizer.zero_grad()
                         pbar.update(1)
                         total_train_steps += 1
+                        # writer.add_scalar('loss/train', loss, total_train_steps)
+                        # writer.add_scalar('lr', lr_scheduler.get_lr(), total_train_steps)
                 else:
                     # regular backpropagation when fp16 is not used
                     loss.backward()
@@ -142,6 +145,8 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
                         optimizer.zero_grad()
                         pbar.update(1)
                         total_train_steps += 1
+                        # writer.add_scalar('loss/train', loss, total_train_steps)
+                        # writer.add_scalar('lr', lr_scheduler.get_lr(), total_train_steps)
 
                 if total_train_steps>0 and train_config.update_lr_every_step>0 and total_train_steps % train_config.update_lr_every_step == 0:
                     lr_scheduler.step()
@@ -263,7 +268,8 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
         # Saving the results every epoch to plot later
         if train_config.save_metrics:
             save_to_json(metrics_filename, train_step_loss, train_loss, train_step_perplexity, train_prep, val_step_loss, val_loss, val_step_perplexity, val_prep)
-
+    # writer.flush()
+    # writer.close()
     avg_epoch_time = sum(epoch_times)/ len(epoch_times)
     avg_checkpoint_time = sum(checkpoint_times)/ len(checkpoint_times) if len(checkpoint_times) > 0 else 0
     avg_train_prep = sum(train_prep)/len(train_prep)

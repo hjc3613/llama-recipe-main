@@ -15,7 +15,7 @@ from torch.distributed.fsdp import (
 from torch.utils.data import DataLoader
 from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
-from transformers.optimization import get_cosine_schedule_with_warmup
+from transformers.optimization import get_cosine_schedule_with_warmup, get_scheduler
 from transformers import (
     # LlamaForCausalLM,
     # LlamaTokenizer,
@@ -67,6 +67,9 @@ from llama_recipes.utils.train_utils import (
 )
 
 from llama_recipes.utils.supervised_dataset import SupervisedDataset
+
+def create_scheduler(train_config, optimizer):
+    get_scheduler(name=train_config.scheduler)
 
 def get_train_val_dataset(train_config, tokenizer):
     if train_config.dataset_format=='bin':
@@ -225,30 +228,30 @@ def main(**kwargs):
             apply_fsdp_checkpointing(model)
     elif not train_config.quantization and not train_config.enable_fsdp:
         model.to("cuda")
+    '''
+    dataset_config = generate_dataset_config(train_config, kwargs)
 
-    # dataset_config = generate_dataset_config(train_config, kwargs)
+     # Load and preprocess the dataset for training and validation
+    dataset_train = get_preprocessed_dataset(
+        tokenizer,
+        dataset_config,
+        split="train",
+    )
 
-    #  # Load and preprocess the dataset for training and validation
-    # dataset_train = get_preprocessed_dataset(
-    #     tokenizer,
-    #     dataset_config,
-    #     split="train",
-    # )
+    if not train_config.enable_fsdp or rank == 0:
+        print(f"--> Training Set Length = {len(dataset_train)}")
 
-    # if not train_config.enable_fsdp or rank == 0:
-    #     print(f"--> Training Set Length = {len(dataset_train)}")
+    dataset_val = get_preprocessed_dataset(
+        tokenizer,
+        dataset_config,
+        split="test",
+    )
+    if not train_config.enable_fsdp or rank == 0:
+            print(f"--> Validation Set Length = {len(dataset_val)}")
 
-    # dataset_val = get_preprocessed_dataset(
-    #     tokenizer,
-    #     dataset_config,
-    #     split="test",
-    # )
-    # if not train_config.enable_fsdp or rank == 0:
-    #         print(f"--> Validation Set Length = {len(dataset_val)}")
-
-    # if train_config.batching_strategy == "packing":
-    #     dataset_train = ConcatDataset(dataset_train, chunk_size=train_config.context_length)
-    
+    if train_config.batching_strategy == "packing":
+        dataset_train = ConcatDataset(dataset_train, chunk_size=train_config.context_length)
+    '''
     # 加载数据
     # dataset_train = SupervisedDataset(train_config.dataset, tokenizer, max_length=train_config.context_length)
     # if train_config.run_validation and train_config.val_ds:
@@ -310,23 +313,27 @@ def main(**kwargs):
         #     weight_decay=train_config.weight_decay,
         # )
     print('optimizer type: ', type(optimizer))
-    # scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
-    if train_config.max_train_step>0:
-        total_steps = min(len(train_dataloader), train_config.max_train_step)
+    if train_config.scheduler == 'StepLR':
+        scheduler = StepLR(optimizer, step_size=1, gamma=train_config.gamma)
     else:
-        total_steps = len(train_dataloader)
-    if train_config.warmup_steps > 0 and train_config.warmup_ratio > 0:
-        warmup_steps = min(train_config.warmup_steps, int(train_config.warmup_ratio*total_steps))
-        print(f'warmup_steps: min({train_config.warmup_steps} and {train_config.warmup_ratio*total_steps})=',warmup_steps)
-    elif train_config.warmup_ratio > 0:
-        warmup_steps = int(train_config.warmup_ratio*total_steps)
-        print(f'warmup_steps {train_config.warmup_ratio}*{total_steps}=', warmup_steps)
-    elif train_config.warmup_steps > 0:
-        warmup_steps = train_config.warmup_steps
-    else:
-        warmup_steps=0
-    print('warmup_steps: ', warmup_steps)
-    scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer, num_training_steps=total_steps, num_warmup_steps=warmup_steps)
+        total_steps = train_config.num_epochs * len(train_dataloader)//train_config.gradient_accumulation_steps
+        if train_config.max_train_step>0:
+            total_steps = min(total_steps, train_config.max_train_step)
+        
+        print('total_steps: ', total_steps, 'len(dataset_train): ', len(dataset_train))
+        if train_config.warmup_steps > 0 and train_config.warmup_ratio > 0:
+            warmup_steps = min(train_config.warmup_steps, int(train_config.warmup_ratio*total_steps))
+            print(f'warmup_steps: min({train_config.warmup_steps} and {train_config.warmup_ratio*total_steps})=',warmup_steps)
+        elif train_config.warmup_ratio > 0:
+            warmup_steps = int(train_config.warmup_ratio*total_steps)
+            print(f'warmup_steps {train_config.warmup_ratio}*{total_steps}=', warmup_steps)
+        elif train_config.warmup_steps > 0:
+            warmup_steps = train_config.warmup_steps
+        else:
+            warmup_steps=0
+        print('warmup_steps: ', warmup_steps)
+        # scheduler = get_cosine_schedule_with_warmup(optimizer=optimizer, num_training_steps=total_steps, num_warmup_steps=warmup_steps)
+        scheduler = get_scheduler(name=train_config.scheduler, optimizer=optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
     print('scheduler type: ', type(scheduler))
 
     # Start the training process
