@@ -13,7 +13,7 @@ RUN apt update \
 #安装软件包
  
 RUN apt-get install -y --no-install-recommends openssh-client openssh-server && \
-    mkdir -p /var/run/sshd
+    mkdir -p /var/run/sshd && apt-get install lrzsz
   
 #拷贝pdsh-2.29到容器目录位于/fl-ift/public下面
  
