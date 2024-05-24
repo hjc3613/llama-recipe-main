@@ -15,7 +15,7 @@ spec:
         spec:
           containers:
           #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
-          - image: harbor.unijn.cn/hujunchao/hjc_image6:v0     #必须填写，自己构建的镜像，注意一定要上传到 harbor 才能使用
+          - image: harbor.unijn.cn/hujunchao/hjc_image_v8:v0     #必须填写，自己构建的镜像，注意一定要上传到 harbor 才能使用
             securityContext:
               privileged: true
             name: mpi-launcher
@@ -23,7 +23,7 @@ spec:
             - /bin/bash
             - -c
             args:
-            - sleep 1d
+            - sleep 3d
             resources:
               limits:
                 cpu: 10
@@ -43,11 +43,11 @@ spec:
         spec:
           containers:
           #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
-          - image: harbor.unijn.cn/hujunchao/hjc_image6:v0
+          - image: harbor.unijn.cn/hujunchao/hjc_image_v8:v0
             securityContext:
               privileged: true
             command: ["/bin/sh","-c"]  # 这块command + args可以视作等价于docker exec -it /bin/bash -c "some_command"
-            args: ["sudo service ssh start && sleep 1d"]
+            args: ["sudo service ssh start && sleep 3d"]
             # 先启动ssh服务（便于后续登上去看状态），然后启动bash脚本，bash脚本替换为你想要运行的任务
             # 也可以直接运行python程序，加入要运行python，可以这样写(此处以启动triton server为例）
             # command: ["/bin/sh","-c"]

@@ -13,12 +13,18 @@ class LlamaType(Enum):
     llama = auto()
     qwdistillation = auto()
     qworpo = auto()
+    qwslm = auto()
 
 if model==LlamaType.qw.name:
     from llama_recipes.qwen.modeling_qwen import QWenBlock as LlamaDecoderLayer
     from llama_recipes.qwen.modeling_qwen import QWenLMHeadModel as LlamaForCausalLM
     from llama_recipes.qwen.tokenization_qwen import QWenTokenizer as LlamaTokenizer
     from llama_recipes.qwen.configuration_qwen import QWenConfig as LlamaConfig
+elif model == LlamaType.qwslm.name:
+    from llama_recipes.qwen_slm.modeling_qwen import QWenBlock as LlamaDecoderLayer
+    from llama_recipes.qwen_slm.modeling_qwen import QWenLMHeadModel as LlamaForCausalLM
+    from llama_recipes.qwen_slm.tokenization_qwen import QWenTokenizer as LlamaTokenizer
+    from llama_recipes.qwen_slm.configuration_qwen import QWenConfig as LlamaConfig
 elif model==LlamaType.qwdistillation.name:
     from llama_recipes.qwen_distillation.modeling_qwen_distillation import QWenBlock as LlamaDecoderLayer
     from llama_recipes.qwen_distillation.modeling_qwen_distillation import QWenLMHeadModelDistillation as LlamaForCausalLM
@@ -46,7 +52,8 @@ elif model==LlamaType.qworpo.name:
     from llama_recipes.qwen_orpo.tokenization_qwen import QWenTokenizer as LlamaTokenizer
     from llama_recipes.qwen_orpo.configuration_qwen import QWenConfig as LlamaConfig
 elif model == LlamaType.llama.name:
-    from transformers import LlamaConfig, LlamaForCausalLM, LlamaTokenizer
+    from transformers import LlamaConfig, LlamaForCausalLM
+    from transformers import AutoTokenizer as LlamaTokenizer
     from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 else:
     raise Exception(f'请设置环境变量: {FT_MODEL_TYPE},其值必须属于{[i.name for i in LlamaType]},当前{FT_MODEL_TYPE}={model}')

@@ -67,11 +67,12 @@ from llama_recipes.utils.train_utils import (
 )
 
 from llama_recipes.utils.supervised_dataset import SupervisedDataset
+from llama_recipes.utils.dpo_dataset import DPODataset, get_collate_fn as dpo_collate_fn
 
 def create_scheduler(train_config, optimizer):
     get_scheduler(name=train_config.scheduler)
 
-def get_train_val_dataset(train_config, tokenizer):
+def get_train_val_dataset(train_config:TRAIN_CONFIG, tokenizer):
     if train_config.dataset_format=='bin':
         dataset_train, _, _ = build_train_valid_test_datasets(
             train_config.dataset, 
@@ -87,11 +88,18 @@ def get_train_val_dataset(train_config, tokenizer):
         else:
             dataset_val = None
     else:
-        dataset_train = SupervisedDataset(train_config.dataset, tokenizer, max_length=train_config.context_length)
-        if train_config.run_validation and train_config.val_ds:
-            dataset_val = SupervisedDataset(train_config.val_ds, tokenizer, max_length=train_config.context_length)
+        if train_config.is_dpo:
+            dataset_train = DPODataset(train_config.dataset, tokenizer)
+            if train_config.run_validation and train_config.val_ds:
+                dataset_val = DPODataset(train_config.val_ds, tokenizer)
+            else:
+                dataset_val = None
         else:
-            dataset_val = None
+            dataset_train = SupervisedDataset(train_config.dataset, tokenizer, max_length=train_config.context_length)
+            if train_config.run_validation and train_config.val_ds:
+                dataset_val = SupervisedDataset(train_config.val_ds, tokenizer, max_length=train_config.context_length)
+            else:
+                dataset_val = None
     return dataset_train, dataset_val
 
 def main(**kwargs):
@@ -132,6 +140,14 @@ def main(**kwargs):
         # if not verify_latest_nightly:
         #     raise Exception("latest pytorch nightly build is required to run with low_cpu_fsdp config, "
         #                     "please install latest nightly.")
+        if 'qwen' in train_config.model_name.lower() and 'qwen1.5' not in train_config.model_name.lower():
+            flash_attn_args = {
+                'use_flash_attn':False
+            }
+        else:
+            flash_attn_args = {
+                'attn_implementation':'sdpa'
+            }
         if rank == 0:
             model = LlamaForCausalLM.from_pretrained(
                 train_config.model_name,
@@ -139,15 +155,18 @@ def main(**kwargs):
                 device_map="auto" if train_config.quantization else None,
                 use_cache=use_cache,
                 # attn_implementation="flash_attention_2",
-                use_flash_attn=True,
-                torch_dtype=torch.bfloat16
+                # use_flash_attn=True,
+                torch_dtype=torch.bfloat16,
+                **flash_attn_args,
             )
         else:
             llama_config = LlamaConfig.from_pretrained(
                 train_config.model_name, 
                 # attn_implementation="flash_attention_2",
-                use_flash_attn=True,
-                torch_dtype=torch.bfloat16)
+                # use_flash_attn=True,
+                torch_dtype=torch.bfloat16,
+                **flash_attn_args,
+                )
             llama_config.use_cache = use_cache
             with torch.device("meta"):
                 model = LlamaForCausalLM(llama_config)
@@ -165,7 +184,7 @@ def main(**kwargs):
         # model = LlamaForCausalLM.from_pretrained(
         #     train_config.model_name,
         #     load_in_8bit=True if train_config.quantization else None,
-        #     device_map="auto" if train_config.quantization else None,
+        #     device_map="auto" if train_config.quantization else 'auto',
         #     use_cache=use_cache,
         # )
     # model.model.gradient_checkpointing = True
@@ -204,10 +223,12 @@ def main(**kwargs):
     #setting up FSDP if enable_fsdp is enabled
     if train_config.enable_fsdp:
         if not train_config.use_peft and train_config.freeze_layers:
-
-            # freeze_transformer_layers(model, train_config.num_freeze_layers)
-            # freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
-            active_transformer_layers_for_qwen(model, train_config.freeze_strategy)
+            if train_config.freeze_reverse:
+                active_transformer_layers_for_qwen(model, train_config.freeze_strategy)
+            else:
+                freeze_transformer_layers(model, train_config.num_freeze_layers)
+                # freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
+            
 
         mixed_precision_policy, wrapping_policy = get_policies(fsdp_config, rank)
         my_auto_wrapping_policy = fsdp_auto_wrap_policy(model, LlamaDecoderLayer)
@@ -227,7 +248,8 @@ def main(**kwargs):
         if fsdp_config.fsdp_activation_checkpointing:
             apply_fsdp_checkpointing(model)
     elif not train_config.quantization and not train_config.enable_fsdp:
-        model.to("cuda")
+        # model.to("cuda")
+        ...
     '''
     dataset_config = generate_dataset_config(train_config, kwargs)
 
@@ -259,6 +281,8 @@ def main(**kwargs):
     dataset_train, dataset_val = get_train_val_dataset(train_config, tokenizer)
         
     train_dl_kwargs = get_dataloader_kwargs(train_config, dataset_train, tokenizer, "train")
+    if train_config.is_dpo:
+        train_dl_kwargs['collate_fn'] = dpo_collate_fn(tokenizer=tokenizer)
 
     # Create DataLoaders for the training and validation dataset
     train_dataloader = DataLoader(
@@ -274,7 +298,8 @@ def main(**kwargs):
             dataset_val = ConcatDataset(dataset_val, chunk_size=train_config.context_length)
 
         val_dl_kwargs = get_dataloader_kwargs(train_config, dataset_val, tokenizer, "val")
-
+        if train_config.is_dpo:
+            val_dl_kwargs['collate_fn'] = dpo_collate_fn(tokenizer=tokenizer)
         eval_dataloader = torch.utils.data.DataLoader(
             dataset_val,
             num_workers=train_config.num_workers_dataloader,

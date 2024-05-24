@@ -2,12 +2,14 @@
 # export NCCL_DEBUG=INFO
 idx=$1
 export FT_MODEL_TYPE='qw'
-
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION='python'
 model_name='/fl-ift/med/common/Qwen-14B-Base'
 # model_name='/fl-ift/med/hujunchao/models/mixtral-8x7b-instruction-v0.1'
+# model_name='/fl-ift/med/common/Qwen-14B-Chat'
+# model_name='/fl-ift/med/common/llama3-openbiollm-8b'
 model_name=${model_name%/} # 删除结尾的/
-data_root=/fl-ift/med/common/datasets/med/mix_med_common/version01
-file_name=chunked_bin/dataset_packed
+data_root=/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/yingxiang_report
+file_name='胸部_腹部'
 dataset=${data_root}/${file_name}
 dist_checkpoint_root_folder=checkpoints_qw
 dist_checkpoint_folder=${file_name%.*}
@@ -15,33 +17,33 @@ dist_checkpoint_folder=${file_name%.*}
 torchrun --nnodes 1 --nproc_per_node 8 \
     finetuning.py \
     --model_name ${model_name} \
-    --dataset_format 'bin' \
+    --dataset_format 'text' \
     --dataset ${dataset} \
     --enable_fsdp \
     --low_cpu_fsdp \
-    --batch_size_training 4 \
+    --batch_size_training 2 \
     --dist_checkpoint_root_folder ${dist_checkpoint_root_folder} \
     --dist_checkpoint_folder ${dist_checkpoint_folder} \
-    --num_epochs 1 \
-    --gradient_accumulation_steps 16 \
+    --num_epochs 5 \
+    --gradient_accumulation_steps 1 \
     --fsdp_config.pure_bf16 \
     --batching_strategy padding \
-    --lr 1e-5 \
+    --lr 2e-5 \
     --seed 123456 \
     --gradient_clipping \
-    --context_length 2500 \
-    --save_checkpoint_every_step 200 \
-    --update_lr_every_step 1 \
-    --warmup_ratio 0.01 \
+    --context_length 4096 \
+    --save_checkpoint_every_step 0 \
+    --warmup_ratio 0.1 \
     --weight_decay 0.1 \
-    --scheduler constant_with_warmup \
-    --save_metrics \
+    --scheduler cosine \
+    --update_lr_every_step 1 \
+    # --save_metrics \
     # --freeze_layers \
-    # --freeze_strategy 6 \
+    # --num_freeze_layers 40 \
+    # --freeze_strategy 1 \
+    # --fsdp_cpu_offload \
     # --max_train_step 100 \
     # --gamma 0.6 \
-    # --num_freeze_layers 48 \
-    # --fsdp_cpu_offload \
     # --optimizer PagedAdamW32bit \
     # --run_validation \
     # --val_ds /fl-ift/nlp/hujunchao/git_root/llama-recipes-main/data/DPO/test${idx}.xlsx \

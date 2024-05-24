@@ -1,6 +1,6 @@
 from tqdm import tqdm
 from os import path, listdir
-from transformers import LlamaForCausalLM, LlamaTokenizer, AutoTokenizer, AutoModelForCausalLM
+from transformers import LlamaForCausalLM, LlamaTokenizer, AutoTokenizer, AutoModelForCausalLM,Qwen2ForCausalLM
 from transformers import BitsAndBytesConfig
 from transformers.generation import GenerationConfig
 import os
@@ -15,6 +15,7 @@ from collections import defaultdict
 from argparse import ArgumentParser
 from peft import AutoPeftModelForCausalLM
 import traceback
+import copy
 # from merge_all_summary import ReOrderSummary, Method
 
 time_prefix = time.strftime("%Y%m%d",time.localtime(time.time())) 
@@ -175,6 +176,14 @@ def dialogue_contains_summary(dialogue, abstract):
 
 class DecodeInterface:
     def __init__(self, hf_model_path, tokenizer_name=None) -> None:
+        if 'qwen' in hf_model_path.lower() and 'qwen1.5' not in hf_model_path.lower():
+            flash_attn_args = {
+                'use_flash_attn':True
+            }
+        else:
+            flash_attn_args = {
+                'attn_implementation':'flash_attention_2'
+            }
         self.model = AutoModelForCausalLM.from_pretrained(
             hf_model_path,
             torch_dtype=torch.bfloat16,
@@ -182,7 +191,9 @@ class DecodeInterface:
             device_map="auto",
             load_in_8bit=False,
             trust_remote_code=True,
-            use_flash_attn=True
+            # attn_implementation="flash_attention_2",
+            # use_flash_attn=True,
+            **flash_attn_args,
         )
         
         self.generation_config = GenerationConfig.from_pretrained(hf_model_path,trust_remote_code=True)
@@ -192,7 +203,7 @@ class DecodeInterface:
         elif tokenizer_name=='unigpt':
             self.tokenizer = LlamaTokenizer.from_pretrained(hf_model_path)
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(hf_model_path, trust_remote_code=True, use_fast=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(hf_model_path, trust_remote_code=True, use_fast=True)
 
         self.cache = defaultdict(list)
 
@@ -212,12 +223,12 @@ class DecodeInterface:
         encoded_input = encoded_input.to(self.model.device)
         generated_ids = self.model.generate(
         **encoded_input,
-        max_new_tokens=512,
+        max_new_tokens=1024,
         do_sample=False,
         pad_token_id=self.tokenizer.eos_token_id
         )
         decoded_output = self.tokenizer.decode(generated_ids[0][len(encoded_input['input_ids'][0]):]).replace('</s>', '').replace('<s>', '')
-        decoded_output = decoded_output.replace('<|endoftext|>', '').replace('<|im_end|>', '')
+        decoded_output = decoded_output.replace('<|endoftext|>', '').replace('<|im_end|>', '').replace('<|end_of_text|>', '')
         return decoded_output
 
     @torch.no_grad()
@@ -305,7 +316,7 @@ class DecodeInterface:
         caches_of_record_id = self.cache.get(record_id, [])
         pre_summary = '\n'.join(i[2] for i in caches_of_record_id[:-window] if not re.search(r'当前对话中',i[2]))
         pre_summary = re.sub(r'\n+', '\n', pre_summary)
-        pre_summary = self.reorder_summary.post_process_abs(pre_summary)
+        # pre_summary = self.reorder_summary.post_process_abs(pre_summary)
         pre_summary_ = '历史信息摘要：\n' + pre_summary
         result = []
         result.append(pre_summary_)
@@ -316,12 +327,12 @@ class DecodeInterface:
 
     def iter_generate(self, cur, record_id, round, date,stream):
         inputs, pre_summary = self.format_cache_to_input_jianglei(record_id, window=10, stream=stream)
-        inputs = f'就诊日期:{date}\n{inputs}\n{cur}\n结论:'
+        # inputs = f'就诊日期:{date}\n{inputs}\n{cur}\n结论:'
         inputs = f'根据下面的历史摘要信息和历史医患对话及摘要，生成最新轮次对话的医学信息摘要：\n{inputs}\n医患对话：\n{cur}\n信息摘要：\n'
-        res_org, res_fixed = self.generate(inputs, date)
-        res_org, res_fixed = res_org.strip(), res_fixed.strip()
+        res_fixed = self.generate(inputs)
+        # res_org, res_fixed = res_org.strip(), res_fixed.strip()
         self.cache[record_id].append((round, cur, res_fixed, pre_summary))
-        return res_org, res_fixed, inputs
+        return res_fixed, res_fixed, inputs
     
     def get_final_summary(self, record_id):
         caches_of_record_id = self.cache.get(record_id, [])
@@ -378,7 +389,19 @@ def only_pred_inputoutput(args):
         row = dict(row)
         try:
             inputs = row['input']
-            res = interface.generate_old(inputs)
+            # messages = [
+            #     # {"role": "system", "content": "You are a helpful assistant."},
+            #     # {'role':'user', 'content':row['dialogue']+'\n基于上述对话，通过问答方式对对话做总结，包括但不限于患者的症状、疾病、用药、手术、血糖指标、血压指标等详信息则要尽量详细复述出来，这些总结内容要满足能生成一份高质量的病历报告：'}
+            #     {'role':'user', 'content':row['dialogue']+'\nplease generate an standart medical record correspond to the above dialogue, including chief complaint、history of present illness、history of past illness、family history、Physical examination、treatment opinions, result in english：'}
+            # ]
+            # inputs = interface.tokenizer.apply_chat_template(
+            #     messages,
+            #     tokenize=False,
+            #     add_generation_prompt=True
+            # )
+            # inputs = f'{row["dialogue"]}\n请结合上述对话，总结出对话中出现的问题和答案:'
+            
+            res = interface.generate(inputs)
         except KeyboardInterrupt:
             traceback.print_exc()
             # print('程序中断')
@@ -386,29 +409,153 @@ def only_pred_inputoutput(args):
         except:
             traceback.print_exc()
             res = 'error'
-        # res = re.sub(r'患者的核心问题', '主诉', res)
-        # res = re.sub(r'核心问题发展历程及其相关治疗、阴性和阳性症状', '现病史', res)
-        # res = re.sub(r'患者过往疾病及其治疗、未曾得过的疾病描述', '既往史', res)
-        # res = re.sub(r'患者月经婚育情况描述', '婚育史', res)
-        # res = re.sub(r'患者吸烟饮酒情况描述', '个人史', res)
-        # res = re.sub(r'患者家族成员相关疾病描述', '家族史', res)
+
         row['pred'] = res
         
         print('='*100)
-        # print('input\n', inputs)
+        print('input\n', inputs)
         print('*'*50)
         print('pred\n', row['pred'])
         print('*'*50)
         print('label\n', row.get('output', ''))
-        # refine_input = f'医患对话:\n{row["input"]}\n预测病历：\n{res}\n根据上面的医患对话对预测病历进行修改，使得其更加匹配医患对话且符合标准电子病历的书写规范，首先生成修改建议，再根据修改建议对预测病历进行修改。修改要求：1.对话中未出现的，但病历中出现的需要删除；2.对话中说法模糊的不确定的，病历中出现需要删除；3.时间不确定的[发生时间]代替；4.生成病历存在口语化的内容需要删除。5.年月日的日期的需要删除。'
-        # try:
-        #     refine_res = interface.generate_old(refine_input)
-        # except:
-        #     traceback.print_exc()
-        #     refine_res = 'error'
-        # row['pred_refine'] = refine_res
-        # print('*'*50)
-        # print('refine:\n', refine_res)
+        
+        result.append(row)
+        # with open(f'{args.file.rsplit(".", maxsplit=1)[0]}_predict.jsonl', mode='a', encoding='utf8') as f:
+        #     f.write(json.dumps(row, ensure_ascii=False)+'\n')
+    output_file_excel = f'{args.file.rsplit(".", maxsplit=1)[0]}_{args.suffix}.xlsx'
+    pd.DataFrame.from_dict(result).to_excel(output_file_excel)
+
+def only_pred_inputoutput2(args):
+    interface = DecodeInterface(
+        hf_model_path=args.model_path
+    )
+    if args.file.endswith('.jsonl'):
+        df = pd.read_json(args.file, lines=True)
+    elif args.file.endswith('.xlsx'):
+        df = pd.read_excel(args.file, sheet_name=args.sheet)
+    result = []
+    df = df.iloc[:int(args.record_nums)]
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        row = dict(row)
+        try:
+            # inputs1 = f"{row['dialogue']}\n请结合上述医患对话和患者就诊日期：{row['admisstion_date']}, 生成医患对话的关键信息摘要："
+            messages = [
+                # {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content":f"{row['dialogue']}\n请结合上述医患对话和患者就诊日期：{row['admisstion_date']}, 生成医患对话的关键信息摘要："},
+                # {'role':'user', 'content':row['dialogue']+'\n基于上述对话，通过问答方式对对话做总结，包括但不限于患者的症状、疾病、用药、手术、血糖指标、血压指标等详信息则要尽量详细复述出来，这些总结内容要满足能生成一份高质量的病历报告：'}
+            ]
+            inputs2 = interface.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            res = interface.generate(inputs2)
+            messages = [
+                # {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content":f"{row['dialogue']}\n请结合上述医患对话和患者就诊日期：{row['admisstion_date']}, 生成医患对话的关键信息摘要："},
+                # {'role':'user', 'content':row['dialogue']+'\n基于上述对话，通过问答方式对对话做总结，包括但不限于患者的症状、疾病、用药、手术、血糖指标、血压指标等详信息则要尽量详细复述出来，这些总结内容要满足能生成一份高质量的病历报告：'},
+                {'role':'assistant', 'content':res},
+                # {'role':'user', 'content':'请基于上述对话和总结的核心问题与答案，写出一份高质量电子病历：'},
+                {'role':'user', 'content':'请结合上述医患对话、关键摘要信息和患者就诊日期生成标准的电子病历：'},
+            ]
+            inputs3 = interface.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            # inputs = f'{inputs}\n{res}\n请结合上述医患对话、关键摘要信息和患者就诊日期生成标准的电子病历：'
+            res = interface.generate(inputs3)
+            # inputs = f'{row["dialogue"]}\n请你总结上述对话，分析医生的提问和患者的回答，生成一份一份病历报告：'
+            # res = interface.generate_old(inputs)
+            # inputs = f"{row['dialogue']}\n请结合上述对话，总结出对话中出现的问题和答案:"
+            # res = interface.generate_old(inputs)
+            # row['pred_nlp_summary'] = res
+            # inputs = f'{inputs}\n上述医患对话中的关键问题和答案如下：\n{res}\n请基于对话，结合关键问题和答案，生成一份病历：'
+            # res = interface.generate_old(inputs)
+        except KeyboardInterrupt:
+            traceback.print_exc()
+            # print('程序中断')
+            sys.exit()
+        except:
+            traceback.print_exc()
+            print(inputs3)
+            res = 'error'
+
+        row['pred'] = res
+        row['input_new'] = inputs3
+        print('='*100)
+        print('input\n', inputs3)
+        print('*'*50)
+        print('pred\n', row['pred'])
+        print('*'*50)
+        print('label\n', row.get('output', ''))
+        
+        result.append(row)
+        # with open(f'{args.file.rsplit(".", maxsplit=1)[0]}_predict.jsonl', mode='a', encoding='utf8') as f:
+        #     f.write(json.dumps(row, ensure_ascii=False)+'\n')
+    output_file_excel = f'{args.file.rsplit(".", maxsplit=1)[0]}_{args.suffix}.xlsx'
+    pd.DataFrame.from_dict(result).to_excel(output_file_excel)
+
+def yingxiangbaogao_fenlei(args):
+    TEMPLATE = {
+    '0':'无意义的前缀内容',
+    '1':'胸廓两侧对称',
+    '2':'支气管血管束清晰',
+    '3':'肺内未见明确异常密度灶',
+    '4':'气管、双肺支气管及其分支管腔通畅',
+    '5':'双侧肺门及纵隔内未见明显增大淋巴结',
+    '6':'心脏形态、大小正常',
+    '7':'胸膜未见明确病变',
+    '8':'胸廓骨质及软组织未见明显异常',
+    '9':'其他异常'
+    }   
+    TEMPLATE2 = {v:k for k,v in TEMPLATE.items()}
+    interface = DecodeInterface(
+        hf_model_path=args.model_path
+    )
+    if args.file.endswith('.jsonl'):
+        df = pd.read_json(args.file, lines=True)
+    elif args.file.endswith('.xlsx'):
+        df = pd.read_excel(args.file, sheet_name=args.sheet)
+    result = []
+    df = df.iloc[:int(args.record_nums)]
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        row = dict(row)
+        try:
+            abnormals:str = row['pred']
+            result_ = []
+            tmp_result_ = []
+            for item in abnormals.split('\n'):
+                item = item.split('、', maxsplit=1)[1]
+                template = '\n'.join([f'.{v}' for k,v in TEMPLATE.items()])
+                inputs = f'给定模板：\n{template}\n请找出“{item}”与上述模板中最匹配的一项并判断二者是否矛盾：'
+                res = interface.generate(inputs)
+                tmp_result_.append(res)
+                parsed = re.findall(r'最匹配项：(.+?),二者(不矛盾|矛盾)', res)
+                q_cls, maodun = parsed[0]
+                num = TEMPLATE2[q_cls]
+                if '不' in maodun:
+                    num = '+'+num
+                result_.append(f'{num}={item}')
+            res = '\n'.join(result_)
+            tmp_res = '\n'.join(tmp_result_)
+        except KeyboardInterrupt:
+            traceback.print_exc()
+            # print('程序中断')
+            sys.exit()
+        except:
+            traceback.print_exc()
+            res = 'error'
+
+        row['pred2'] = res
+        row['tmp'] = tmp_res
+        print('='*100)
+        print('input\n', inputs)
+        print('*'*50)
+        print('pred\n', row['pred2'])
+        print('*'*50)
+        print('label\n', row.get('output', ''))
+        
         result.append(row)
         # with open(f'{args.file.rsplit(".", maxsplit=1)[0]}_predict.jsonl', mode='a', encoding='utf8') as f:
         #     f.write(json.dumps(row, ensure_ascii=False)+'\n')
@@ -463,6 +610,56 @@ def dialogue2nlp_abs(args):
     output_file_excel = f'{args.file.rsplit(".", maxsplit=1)[0]}_{args.suffix}.xlsx'
     df.to_excel(output_file_excel)
 
+def duplicate_keys_for_diag2abs(pred_output_list):
+    new_output_dict = {}
+    new_output = []
+    pred_output_list = list(dict.fromkeys(pred_output_list).keys())
+    for pred in pred_output_list:
+        if pred == "当前对话无有效医学摘要信息": continue
+        # pred = pred.replace("，", "、")
+        # if pred.count(":") == 1:
+        #     key, value = pred.split(":")
+        #     if key not in new_output_dict.keys():
+        #         new_output_dict.update({key: [value]})
+        #     else:
+        #         new_output_dict[key].append(value)
+        pred = pred.replace(":", "：")
+        items = pred.split("：")
+        key = items[0]
+        value = ":".join(items[1:])
+        if key not in new_output_dict.keys():
+            new_output_dict.update({key: [value]})
+        else:
+            new_output_dict[key].append(value)
+    # 子串去重
+    for key, value_list in new_output_dict.items():
+        value_list = list(dict.fromkeys(value_list).keys())
+        new_value = copy.deepcopy(value_list)
+        for i in range(len(value_list)):
+            for j in range(len(value_list)):
+                if i == j: continue
+                if value_list[i].find(value_list[j]) != -1:
+                    if value_list[j] in new_value:
+                        new_value.remove(value_list[j])
+        # print(new_value)
+        new_output.append(key + ":" + "，".join(new_value))
+    # 根据资源key进行重新排序
+    f = open("./all_summary_keys/key_position.txt", 'r', encoding='utf-8')
+    key_order = f.readlines()
+    key_order = [key.strip("\n") for key in key_order]
+    f.close()
+    new_abs_list = []
+    for abs in new_output:
+        abs_list = re.split(":|：", abs)
+        new_abs_list.append({"key": abs_list[0].replace(" ", ""), "value": "，".join(abs_list[1:]).replace(" ", "")})
+    # key根据固定排序
+    sorted_items = sorted(new_abs_list,
+                          key=lambda x: key_order.index(x['key']) if x['key'] in key_order else float('inf'))
+    new_abs_list = []
+    for items in sorted_items:
+        new_abs_list.append(items["key"] + "：" + items["value"])
+    return '\n'.join(new_abs_list)
+
 def main(args):
     interface = DecodeInterface(args.model_path, args.tokenizer_name)
     if args.file.endswith('.xlsx'):
@@ -495,7 +692,7 @@ def main(args):
         res_org, res, inputs = interface.process(row, type=args.decode_type, stream=eval(args.stream))
         if '无法得到确定性信息' in res:
             res = ''
-        res = interface.post_process.process(res, row['当前对话'])
+        # res = interface.post_process.process(res, row['当前对话'])
         row['pred_output'] = res
         row['pred_output_org'] = res_org
         row['input_new'] = inputs
@@ -521,15 +718,15 @@ def main(args):
     # print(f'save to {output_file_jsonl}')
     # to_jsonl(result.to_dict(orient='records'), output_file_jsonl)
     for record_id, subdf in result.groupby('record_id'):
-        all_summary_pred = '\n'.join([i for i in subdf['pred_output'] if i and not re.search(r'当前对话', i)])
-        all_summary_pred = interface.reorder_summary.post_process_abs(all_summary_pred)
+        all_summary_pred = [j for i in subdf['pred_output'] if i and not re.search(r'当前对话', i) for j in i.split('\n')]
+        all_summary_pred = duplicate_keys_for_diag2abs(all_summary_pred)
 
         subdf_cls_contain = subdf[subdf['蕴含模型输出'] == '是']
-        all_summary_pred_cls_contain = '\n'.join([i for i in subdf_cls_contain['pred_output'] if i and not re.search(r'当前对话', i)])
-        all_summary_pred_cls_contain = interface.reorder_summary.post_process_abs(all_summary_pred_cls_contain)
+        all_summary_pred_cls_contain = [j for i in subdf_cls_contain['pred_output'] if i and not re.search(r'当前对话', i) for j in i.split('\n')]
+        all_summary_pred_cls_contain = duplicate_keys_for_diag2abs(all_summary_pred_cls_contain)
         
-        all_summary_label = '\n'.join([i for i in subdf['gold_output'] if i and not re.search(r'当前对话', i)])
-        all_summary_label = interface.reorder_summary.post_process_abs(all_summary_label)
+        all_summary_label = [j for i in subdf['gold_output'] if i and not re.search(r'当前对话', i) for j in i.split('\n')]
+        all_summary_label = duplicate_keys_for_diag2abs(all_summary_label)
         depart = list(subdf['depart'])[0] if 'depart' in subdf.columns else list(subdf['department'])[0]
         dialogue = '\n'.join([i for i in subdf['当前对话']])
         result_final.append(
@@ -564,5 +761,6 @@ if __name__ == '__main__':
         process_dir(args.excel_dir, args)
     elif args.input_output:
         only_pred_inputoutput(args)
+        # yingxiangbaogao_fenlei(args)
     else:
         main(args)
