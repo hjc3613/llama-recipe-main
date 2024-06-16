@@ -17,4 +17,5 @@ class fsdp_config:
     fsdp_cpu_offload: bool=False
     pure_bf16: bool = False
     optimizer: str= "AdamW"
+    parallel_granularity = 'decoder_layer' # decoder_layer | weight，并行粒度，默认情况下将decoder layer作为最小fsdp单元，当设为weight时，最小单元为每个moudle的权重
     

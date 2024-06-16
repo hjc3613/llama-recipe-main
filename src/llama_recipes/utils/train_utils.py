@@ -507,7 +507,7 @@ def get_policies(cfg, rank):
                 print(f"FP16 enabled")
         else:
             print(f"bFloat16 support not present. Using FP32, and not mixed precision")
-    wrapping_policy = get_llama_wrapper()
+    wrapping_policy = get_llama_wrapper(cfg)
     return mixed_precision_policy, wrapping_policy
 
 def save_train_params(train_config, fsdp_config, rank, step=None):

@@ -1131,7 +1131,7 @@ class QWenLMHeadModel(QWenPreTrainedModel):
             valid_labels = shift_labels.clone()
             valid_labels[valid_labels==-100] = 0
             per_token_prob = torch.gather(shift_logits.softmax(-1), dim=2, index=valid_labels.unsqueeze(2)).squeeze(2)
-            shift_labels = torch.where(torch.bitwise_and(per_token_prob>0.95, shift_labels!=-100), -100, shift_labels)
+            shift_labels = torch.where(torch.bitwise_and(per_token_prob>0.55, shift_labels!=-100), -100, shift_labels)
             loss_fct = CrossEntropyLoss(reduction='none')
             loss = loss_fct(
                 shift_logits.contiguous().view(-1, shift_logits.contiguous().size(-1)), shift_labels.contiguous().view(-1)

@@ -174,11 +174,40 @@ def dialogue_contains_summary(dialogue, abstract):
     res = requests.post(url=url, data=payload).json()['choices'][0]['message']['content']
     return res
 
+def _get_batch_logps(logits: torch.FloatTensor, labels: torch.LongTensor, average_log_prob: bool = False) -> torch.FloatTensor:
+    """Compute the log probabilities of the given labels under the given logits.
+
+    Args:
+        logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
+        labels: Labels for which to compute the log probabilities. Label tokens with a value of -100 are ignored. Shape: (batch_size, sequence_length)
+        average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+
+    Returns:
+        A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+    """
+    assert logits.shape[:-1] == labels.shape
+
+    labels = labels[:, 1:].clone()
+    logits = logits[:, :-1, :]
+    loss_mask = (labels != -100)
+
+    # dummy token; we'll ignore the losses on these tokens later
+    labels[labels == -100] = 0
+
+    per_token_logps = torch.gather(logits.softmax(-1), dim=2, index=labels.unsqueeze(2)).squeeze(2)
+
+    logps = per_token_logps[0].tolist()
+    tokenids = labels[0].tolist()
+    return logps, tokenids
+    if average_log_prob:
+        return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
+    else:
+        return (per_token_logps * loss_mask).sum(-1)
 class DecodeInterface:
     def __init__(self, hf_model_path, tokenizer_name=None) -> None:
-        if 'qwen' in hf_model_path.lower() and 'qwen1.5' not in hf_model_path.lower():
+        if 'qwen' in hf_model_path.lower() and 'qwen1.5' not in hf_model_path.lower() and 'qwen2' not in hf_model_path.lower():
             flash_attn_args = {
-                'use_flash_attn':True
+                'use_flash_attn':False
             }
         else:
             flash_attn_args = {
@@ -192,7 +221,7 @@ class DecodeInterface:
             load_in_8bit=False,
             trust_remote_code=True,
             # attn_implementation="flash_attention_2",
-            # use_flash_attn=True,
+            # use_flash_attn=False,
             **flash_attn_args,
         )
         
@@ -225,7 +254,8 @@ class DecodeInterface:
         **encoded_input,
         max_new_tokens=1024,
         do_sample=False,
-        pad_token_id=self.tokenizer.eos_token_id
+        pad_token_id=self.tokenizer.eos_token_id,
+        num_return_sequences=1
         )
         decoded_output = self.tokenizer.decode(generated_ids[0][len(encoded_input['input_ids'][0]):]).replace('</s>', '').replace('<s>', '')
         decoded_output = decoded_output.replace('<|endoftext|>', '').replace('<|im_end|>', '').replace('<|end_of_text|>', '')
@@ -250,24 +280,34 @@ class DecodeInterface:
 
     @torch.no_grad()
     def forward(self, text, example_id):
-        def bi_score(x, y):
-            a = hidden_states[x].squeeze(0).to('cuda:0') # [seq_len, hidden size]
-            b = hidden_states[y].squeeze(0).to('cuda:0') # [seq_len, hidden size]
-            b = b.to(a.device)
-            bi_each_dim = (a*b).sum(0)/(torch.norm(a, p=2, dim=0) * torch.norm(b, p=2, dim=0)) # [hidden size]
-            bi_one_layer = bi_each_dim.mean()
-            bi_final = 1 - bi_one_layer
-            return bi_final
+        import matplotlib.pylab as plt
+        # def bi_score(x, y):
+        #     a = hidden_states[x].squeeze(0).to('cuda:0') # [seq_len, hidden size]
+        #     b = hidden_states[y].squeeze(0).to('cuda:0') # [seq_len, hidden size]
+        #     b = b.to(a.device)
+        #     bi_each_dim = (a*b).sum(0)/(torch.norm(a, p=2, dim=0) * torch.norm(b, p=2, dim=0)) # [hidden size]
+        #     bi_one_layer = bi_each_dim.mean()
+        #     bi_final = 1 - bi_one_layer
+        #     return bi_final
         batch = self.tokenizer(text=text, return_tensors='pt')
-        res = self.model(**batch, output_hidden_states=True)
-        hidden_states = res.hidden_states
-        for layer_idx in range(len(hidden_states)-2):
-            bi = bi_score(layer_idx, layer_idx+2)
-            if layer_idx in [33,34,35,36]:
-                tmp = 1
-            with open('./bi_score_tmp3.txt', mode='a', encoding='utf8') as f:
-                f.write(f'{example_id},{layer_idx},{bi.item()}'+'\n')
-    
+        batch = {k:v.to(self.model.device) for k,v in batch.items()}
+        res = self.model(**batch, )
+        # hidden_states = res.hidden_states
+        # for layer_idx in range(len(hidden_states)-2):
+        #     bi = bi_score(layer_idx, layer_idx+2)
+        #     if layer_idx in [33,34,35,36]:
+        #         tmp = 1
+        #     with open('./bi_score_tmp3.txt', mode='a', encoding='utf8') as f:
+        #         f.write(f'{example_id},{layer_idx},{bi.item()}'+'\n')
+
+        # for layer, attn in enumerate(res.attentions[:5]):
+        #     plt.imshow(1- attn[0][0].cpu().to(torch.float32).numpy(), cmap='hot', interpolation=None)
+        #     plt.savefig(f'tmp/{example_id}-{layer}.png')
+        res
+        logps, tokenids = _get_batch_logps(res.logits, batch['input_ids'])
+        tokens = self.tokenizer.convert_ids_to_tokens(tokenids)
+        token_probs = list(zip([i.decode() for i in tokens], logps))
+        return token_probs
     @torch.no_grad()
     def generate_qw(self, text, admission_date):
         generation_config = GenerationConfig(
@@ -350,7 +390,7 @@ class DecodeInterface:
             raise Exception('type 传值错误')
         
 def process_dir(root, args):
-    excels = [i for i in os.listdir(root) if i.endswith('.xlsx') and not re.search(r'_tmp|预标_qwen', i)][:]
+    excels = [i for i in os.listdir(root) if i.endswith('.xlsx') and not re.search(r'_tmp|_abnormal', i)][:]
     # exists = [i.replace('_预标_qwen', '') for i in os.listdir(root) if i.endswith('.xlsx') and re.search(r'_tmp|预标', i)]
     # excels = [i for i in excels if i not in exists]
     interface = DecodeInterface(
@@ -358,22 +398,24 @@ def process_dir(root, args):
     )
     for excel in tqdm(excels):
         path = os.path.join(root, excel)
-        df = pd.read_excel(path)
+        df = pd.read_excel(path, sheet_name='Sheet5')
+        df = df.sample(n=200, random_state=100).reset_index(drop=True)
         result = []
         for idx, row in tqdm(df.iterrows(), total=len(df)):
             row = dict(row)
-            if 'round' not in row:
-                row['round'] = idx
-            res_org, res_fixed, inputs = interface.process(row, type='iter',stream=False)
-            if '无法得到确定性信息' in res_fixed:
-                res_fixed = ''
-            row['过程摘要_迭代生成'] = res_fixed
-            row['过程摘要_模型输出'] = res_org
-            row['new_input'] = inputs
+            inputs = row['input']
+            prompt = f'请找出下列影像学报告中检查所见的异常所见，忽略阴性描述\n检查所见：{inputs}\n异常所见：'
+            res = interface.generate(prompt)
+            row['pred'] = res
+            print('='*100)
+            print('input\n', prompt)
+            print('*'*50)
+            print('pred\n', row['pred'])
+            
             result.append({**row})
             
         result = pd.DataFrame.from_dict(result)
-        result.to_excel(path.replace('.xlsx', '_预标_qwen.xlsx'))
+        result.to_excel(path.replace('.xlsx', '_abnormal.xlsx'))
 
 def only_pred_inputoutput(args):
     interface = DecodeInterface(
@@ -400,7 +442,7 @@ def only_pred_inputoutput(args):
             #     add_generation_prompt=True
             # )
             # inputs = f'{row["dialogue"]}\n请结合上述对话，总结出对话中出现的问题和答案:'
-            
+            # interface.forward('''        头颅形态如常，脑实质内无明显异常密度区及形态改变区。脑室系统、脑沟、裂、池无异常。中线结构居中。颅骨未见明确骨折征象。额部头皮软组织密度增高。\n请根据上述影像报告，生成诊断结论: 1、头颅CT平扫脑内未见明显异常；  2(Somehow I don't like the word "increased" in the report, so I will use "edema" instead. )额部头皮软组织肿胀。''', idx)
             res = interface.generate(inputs)
         except KeyboardInterrupt:
             traceback.print_exc()

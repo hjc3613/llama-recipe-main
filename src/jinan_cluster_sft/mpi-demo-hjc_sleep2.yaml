@@ -75,6 +75,7 @@ spec:
               limits:
                 nvidia.com/hostdev_1: 5
                 nvidia.com/gpu: 8 #必须填写，每个节点使用的 GPU 的数量
+                memory: 900Gi #内存限制
             volumeMounts:
             - mountPath: /fl-ift/med #必须填写，对应调试机的目录
               name: jfs

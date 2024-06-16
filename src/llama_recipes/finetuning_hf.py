@@ -68,6 +68,7 @@ from llama_recipes.utils.train_utils import (
 
 from llama_recipes.utils.supervised_dataset import SupervisedDataset
 from llama_recipes.utils.dpo_dataset import DPODataset, get_collate_fn as dpo_collate_fn
+from llama_recipes.utils.validate_parameters import validate_train_args
 
 def create_scheduler(train_config, optimizer):
     get_scheduler(name=train_config.scheduler)
@@ -107,6 +108,7 @@ def main(**kwargs):
     # Update the configuration for the training and sharding process
     train_config, fsdp_config = TRAIN_CONFIG(), FSDP_CONFIG()
     update_config((train_config, fsdp_config), **kwargs)
+    validate_train_args(train_config)
 
     # Set the seeds for reproducibility
     torch.cuda.manual_seed(train_config.seed)
@@ -119,7 +121,7 @@ def main(**kwargs):
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
-        print('local_rank: ', local_rank, 'rank: ', rank, 'word_size: ', world_size)
+        print('\nlocal_rank: ', local_rank, 'rank: ', rank, 'word_size: ', world_size)
 
     if torch.distributed.is_initialized():
         torch.cuda.set_device(local_rank)
@@ -140,14 +142,22 @@ def main(**kwargs):
         # if not verify_latest_nightly:
         #     raise Exception("latest pytorch nightly build is required to run with low_cpu_fsdp config, "
         #                     "please install latest nightly.")
-        if 'qwen' in train_config.model_name.lower() and 'qwen1.5' not in train_config.model_name.lower():
+        model_name_lower = train_config.model_name.lower()
+        if 'qwen' in model_name_lower and 'qwen1.5' not in model_name_lower and 'qwen2' not in model_name_lower:
             flash_attn_args = {
-                'use_flash_attn':False
+                'use_flash_attn':True
             }
         else:
             flash_attn_args = {
-                'attn_implementation':'sdpa'
+                'attn_implementation':'flash_attention_2'
             }
+        llama_config = LlamaConfig.from_pretrained(
+                train_config.model_name, 
+                # attn_implementation="flash_attention_2",
+                # use_flash_attn=True,
+                torch_dtype=torch.bfloat16,
+                **flash_attn_args,
+                )
         if rank == 0:
             model = LlamaForCausalLM.from_pretrained(
                 train_config.model_name,
@@ -174,9 +184,9 @@ def main(**kwargs):
 
     else:
         from accelerate import infer_auto_device_map, init_empty_weights,load_checkpoint_and_dispatch
-        config = LlamaConfig.from_pretrained(train_config.model_name)
+        llama_config = LlamaConfig.from_pretrained(train_config.model_name)
         with init_empty_weights():
-            model = LlamaForCausalLM._from_config(config)
+            model = LlamaForCausalLM._from_config(llama_config)
             # device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=['10GB']*4)
         model = load_checkpoint_and_dispatch(
             model, checkpoint=train_config.model_name, device_map="auto", no_split_module_classes=model._no_split_modules
@@ -247,6 +257,7 @@ def main(**kwargs):
         )
         if fsdp_config.fsdp_activation_checkpointing:
             apply_fsdp_checkpointing(model)
+        print('fsdp model: ', model)
     elif not train_config.quantization and not train_config.enable_fsdp:
         # model.to("cuda")
         ...

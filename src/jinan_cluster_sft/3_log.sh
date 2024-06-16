@@ -1,1 +1,1 @@
-kubectl logs -f $1
+kubectl logs -f $1 -n med

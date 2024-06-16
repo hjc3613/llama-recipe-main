@@ -20,6 +20,12 @@ def convert_json_excel_for_diag2key():
     result = pd.DataFrame.from_dict(result)
     result.to_excel(file.replace('.jsonl', '.xlsx'))
 
+def check_freeze():
+    from transformers import AutoModelForCausalLM
+    model1 = AutoModelForCausalLM.from_pretrained('/fl-ift/med/common/Qwen2-72B-Instruct', device_map='cpu', attn_implementation='flash_attention_2')
+    # model2 = AutoModelForCausalLM.from_pretrained('/fl-ift/med/common/Qwen-72B-Chat', device_map='cpu', trust_remote_code=True, use_flash_attn=True)
+    model1
 
 if __name__ == '__main__':
-    convert_json_excel_for_diag2key()
+    # convert_json_excel_for_diag2key()
+    check_freeze()
