@@ -417,6 +417,22 @@ def active_transformer_layers_for_qwen(model:LlamaForCausalLM, strategy:int):
                 for param in layer.parameters():
                     param.requires_grad = False
 
+def freeze_transformer_layers_for_qwen_new(model, layers, layer_path, action):
+    if action == 'active':
+        for param in model.parameters():
+            param.requires_grad = False
+
+    layer_path_lst = layer_path.split('.')
+    for sub_module in layer_path_lst[1:]:
+        model = getattr(model, sub_module)
+    for i, layer in enumerate(model, start=1):
+        if i in layers:
+            for param in layer.parameters():
+                if action == 'active':
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+
 def check_frozen_layers_peft_model(model):
      for i, layer in enumerate(model.base_model.model.model.layers):
             for name, param in layer.named_parameters():

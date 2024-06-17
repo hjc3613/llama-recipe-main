@@ -41,8 +41,8 @@ if [[ $MODE == *"train"* ]]; then
     --scheduler cosine \
     --update_lr_every_step 1 \
     --freeze_layers \
-    --num_freeze_layers 40 \
-    --freeze_strategy 1 \
+    --transformer_layers_path 'model.model.layers' \
+    --freeze_strategy 'freeze:1-80-2' `# action:9-90-9, freeze:[0,2,4,6-10]`\
     --parallel_granularity 'Qwen2SdpaAttention-Qwen2FlashAttention2-Qwen2Attention-Qwen2MLP-Qwen2RMSNorm' `# weight、decoder_layer、QWenAttention-QWenMLP-RMSNorm、QWen2SdpaAttention-QWen2FlashAttention2-QWen2Attention-QWen2MLP-QWen2RMSNorm` \
     # --fsdp_cpu_offload \
     # --max_train_step 100 \

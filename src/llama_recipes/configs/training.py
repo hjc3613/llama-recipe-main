@@ -32,9 +32,9 @@ class train_config:
     use_peft: bool=False
     output_dir: str = "PATH/to/save/PEFT/model"
     freeze_layers: bool = False
-    freeze_reverse: bool = False # 默认为False，即只冻结特定层，激活其它层；若为True，则相反，只激活特定层，冻结其它层，为适配论文llama_pro
+    transformer_layers_path: str = 'model.model.layers'
     num_freeze_layers: int = 1
-    freeze_strategy: int = 1 # 冻结层的策略，自定义，比如等于3时，只冻结3、6、9......层，层数从1开始计算，而非0
+    freeze_strategy: str = '' # 冻结层的策略，active:9-90-9, freeze:[2,4,6-8,10]
     quantization: bool = False
     one_gpu: bool = False
     save_model: bool = True

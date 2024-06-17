@@ -52,12 +52,12 @@ from llama_recipes.utils.config_utils import (
     generate_dataset_config,
     get_dataloader_kwargs,
 )
-from llama_recipes.utils.dataset_utils import get_preprocessed_dataset
+from llama_recipes.utils.freeze_strategy import parse_freeze_strategy
 
 from llama_recipes.utils.train_utils import (
     train,
     freeze_transformer_layers_for_qwen,
-    freeze_transformer_layers,
+    freeze_transformer_layers_for_qwen_new,
     active_transformer_layers_for_qwen,
     setup,
     setup_environ_flags,
@@ -121,7 +121,7 @@ def main(**kwargs):
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
-        print('\nlocal_rank: ', local_rank, 'rank: ', rank, 'word_size: ', world_size)
+        print(f'\nlocal_rank: {local_rank} , rank: {rank}, word_size: {world_size}')
 
     if torch.distributed.is_initialized():
         torch.cuda.set_device(local_rank)
@@ -233,12 +233,13 @@ def main(**kwargs):
     #setting up FSDP if enable_fsdp is enabled
     if train_config.enable_fsdp:
         if not train_config.use_peft and train_config.freeze_layers:
-            if train_config.freeze_reverse:
-                active_transformer_layers_for_qwen(model, train_config.freeze_strategy)
-            else:
-                freeze_transformer_layers(model, train_config.num_freeze_layers)
-                # freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
-            
+            # if train_config.freeze_reverse:
+            #     active_transformer_layers_for_qwen(model, train_config.freeze_strategy)
+            # else:
+            #     freeze_transformer_layers(model, train_config.num_freeze_layers)
+            #     freeze_transformer_layers_for_qwen(model, train_config.num_freeze_layers, train_config.freeze_strategy)
+            action, layers = parse_freeze_strategy(train_config.freeze_strategy)
+            freeze_transformer_layers_for_qwen_new(model, layers, train_config.transformer_layers_path, action)
 
         mixed_precision_policy, wrapping_policy = get_policies(fsdp_config, rank)
         my_auto_wrapping_policy = fsdp_auto_wrap_policy(model, LlamaDecoderLayer)
