@@ -36,7 +36,7 @@ from torch import nn
 SUPPORT_CUDA = torch.cuda.is_available()
 SUPPORT_BF16 = SUPPORT_CUDA and torch.cuda.is_bf16_supported()
 SUPPORT_FP16 = SUPPORT_CUDA and torch.cuda.get_device_capability(0)[0] >= 7
-from .dpo_utils import _get_batch_logps, preference_loss
+from .dpo_utils import _get_batch_logps, orpo_loss, simpo_loss
 from .configuration_qwen import QWenConfig
 from .qwen_generation_utils import (
     HistoryType,
@@ -1329,14 +1329,6 @@ class QWenLMHeadModel(QWenPreTrainedModel):
 class QWenLMHeadModelORPO(QWenLMHeadModel):
     def __init__(self, config):
         super().__init__(config)
-    
-    def read_reference_score(self, indexes):
-        reference_score_caches = '/fl-ift/med/hujunchao/git_root/llama-recipes-main/src/reference_score_caches'
-        result = []
-        for i in indexes:
-            i_th_tensor = load_file(os.path.join(reference_score_caches, f'{i}.safetensors'))
-            result.append(i_th_tensor['value'])
-        return torch.stack(result)
 
     def forward(
         self,
@@ -1349,43 +1341,40 @@ class QWenLMHeadModelORPO(QWenLMHeadModel):
         # only_reference = False
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         # dataset中将正负样本拼接，此处再分离，单个计算以节省显存
-        # batchsize = concatenated_input_ids.shape[0]
-        # chosen_input_ids, reject_input_ids = concatenated_input_ids.split(batchsize//2)
-        # chosen_attention_mask, reject_attention_mask = concatenated_attention_mask.split(batchsize//2)
-        # chosen_labels, reject_labels = concatenated_labels.split(batchsize//2)
-        # res_chosen:CausalLMOutputWithPast = super().forward(
-        #     input_ids=chosen_input_ids,
-        #     attention_mask=chosen_attention_mask,
-        #     labels=chosen_labels
-        # )
-        # chosen_logits = res_chosen.logits.to(torch.float32)
-        # chosen_logps = _get_batch_logps(chosen_logits, chosen_labels.to(chosen_logits.device), average_log_prob=True)
-        # chosen_logits = None
-        # res_chosen.logits = None
-        # res_reject:CausalLMOutputWithPast = super().forward(
-        #     input_ids=reject_input_ids,
-        #     attention_mask=reject_attention_mask,
-        #     labels=reject_labels
-        # )
-        # reject_logits = res_reject.logits.to(torch.float32)
-        # reject_logps = _get_batch_logps(reject_logits, reject_labels.to(reject_logits.device), average_log_prob=True)
-        # reject_logits = None
-        # res_reject.logits = None
-        res:CausalLMOutputWithPast = super().forward(
-            input_ids=concatenated_input_ids,
-            attention_mask=concatenated_attention_mask,
-            labels=concatenated_labels
+        batchsize = concatenated_input_ids.shape[0]
+        chosen_input_ids, reject_input_ids = concatenated_input_ids.split(batchsize//2)
+        chosen_attention_mask, reject_attention_mask = concatenated_attention_mask.split(batchsize//2)
+        chosen_labels, reject_labels = concatenated_labels.split(batchsize//2)
+        res_chosen:CausalLMOutputWithPast = super().forward(
+            input_ids=chosen_input_ids,
+            attention_mask=chosen_attention_mask,
+            labels=chosen_labels
         )
-        all_logits = res.logits.to(torch.float32)
-        all_logps = _get_batch_logps(all_logits, concatenated_labels.to(all_logits.device), average_log_prob=True)
+        chosen_logits = res_chosen.logits.to(torch.float32)
+        chosen_logps = _get_batch_logps(chosen_logits, chosen_labels.to(chosen_logits.device), average_log_prob=True)
+        
+        res_reject:CausalLMOutputWithPast = super().forward(
+            input_ids=reject_input_ids,
+            attention_mask=reject_attention_mask,
+            labels=reject_labels
+        )
+        reject_logits = res_reject.logits.to(torch.float32)
+        reject_logps = _get_batch_logps(reject_logits, reject_labels.to(reject_logits.device), average_log_prob=True)
+        
+        # res:CausalLMOutputWithPast = super().forward(
+        #     input_ids=concatenated_input_ids,
+        #     attention_mask=concatenated_attention_mask,
+        #     labels=concatenated_labels
+        # )
+        # all_logits = res.logits.to(torch.float32)
+        # all_logps = _get_batch_logps(all_logits, concatenated_labels.to(all_logits.device), average_log_prob=True)
         # chosen_logps, rejected_logps = all_logps.split(all_logps.shape[0]//2)
         
-        # log_odds = (chosen_logps - reject_logps) - (torch.log(1-torch.exp(chosen_logps)) - torch.log(1-torch.exp(reject_logps)))
-        # sig_ratio = torch.nn.functional.sigmoid(log_odds)
-        # ratio = -torch.log(sig_ratio).mean()
-        # loss = res_chosen.loss+0.1*ratio
-        # res_chosen.loss = loss
-        return res.loss, all_logps
+        
+        # res_chosen.loss = orpo_loss(chosen_logps,reject_logps, res_chosen.loss)
+        res_chosen.loss = simpo_loss(chosen_logps, reject_logps)
+        # return res.loss, all_logps
+        return res_chosen
 
 class RotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, base=10000):

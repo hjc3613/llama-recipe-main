@@ -6,12 +6,12 @@ echo 'MODE: '$MODE
 export FT_MODEL_TYPE='qw2'
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION='python'
 # model_name='/fl-ift/med/common/Qwen-72B-Chat'
-model_name='/fl-ift/med/common/Qwen2-72B-Instruct'
-# model_name='/fl-ift/med/common/Qwen-14B-Chat'
-# model_name='/fl-ift/med/common/llama3-openbiollm-8b'
+# model_name='/fl-ift/med/common/Qwen2-72B-Instruct'
+# model_name='/fl-ift/med/common/Qwen-14B-Base'
+model_name='/fl-ift/med/hujunchao/models/unigpt_pro_17B'
 model_name=${model_name%/} # 删除结尾的/
-data_root=/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/yingxiang_report
-file_name='胸部_腹部_头颅'
+data_root=/fl-ift/med/hujunchao/git_root/llama-recipes-main/data/yingxiang_report/生成结论2
+file_name='all_part_diagnose'
 dataset=${data_root}/${file_name}
 dist_checkpoint_root_folder=checkpoints_qw
 dist_checkpoint_folder=${file_name%.*}
@@ -24,11 +24,11 @@ if [[ $MODE == *"train"* ]]; then
     --dataset ${dataset} \
     --enable_fsdp \
     --low_cpu_fsdp \
-    --batch_size_training 1 \
+    --batch_size_training 8 \
     --dist_checkpoint_root_folder ${dist_checkpoint_root_folder} \
     --dist_checkpoint_folder ${dist_checkpoint_folder} \
     --num_epochs 5 \
-    --gradient_accumulation_steps 4 \
+    --gradient_accumulation_steps 1 \
     --fsdp_config.pure_bf16 \
     --batching_strategy padding \
     --lr 2e-5 \
@@ -40,10 +40,10 @@ if [[ $MODE == *"train"* ]]; then
     --weight_decay 0.1 \
     --scheduler cosine \
     --update_lr_every_step 1 \
-    --freeze_layers \
-    --transformer_layers_path 'model.model.layers' \
-    --freeze_strategy 'freeze:1-80-2' `# action:9-90-9, freeze:[0,2,4,6-10]`\
-    --parallel_granularity 'Qwen2SdpaAttention-Qwen2FlashAttention2-Qwen2Attention-Qwen2MLP-Qwen2RMSNorm' `# weight、decoder_layer、QWenAttention-QWenMLP-RMSNorm、QWen2SdpaAttention-QWen2FlashAttention2-QWen2Attention-QWen2MLP-QWen2RMSNorm` \
+    # --freeze_layers \
+    # --transformer_layers_path 'model.model.layers' \
+    # --freeze_strategy 'freeze:1-80-2' `# action:9-90-9, freeze:[0,2,4,6-10]`\
+    # --parallel_granularity 'Qwen2SdpaAttention-Qwen2FlashAttention2-Qwen2Attention-Qwen2MLP-Qwen2RMSNorm' `# weight、decoder_layer、QWenAttention-QWenMLP-RMSNorm、QWen2SdpaAttention-QWen2FlashAttention2-QWen2Attention-QWen2MLP-QWen2RMSNorm` \
     # --fsdp_cpu_offload \
     # --max_train_step 100 \
     # --gamma 0.6 \

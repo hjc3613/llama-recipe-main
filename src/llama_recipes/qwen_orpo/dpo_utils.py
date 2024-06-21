@@ -109,3 +109,51 @@ def concatenated_inputs(batch: Dict[str, Union[List, torch.LongTensor]]) -> Dict
     # concatenated_batch['reference_rejected_logps'] = torch.tensor(batch['ref_reject_score'])
     concatenated_batch['index'] = torch.tensor(batch['index'], dtype=torch.long)
     return concatenated_batch
+
+def orpo_loss(chosen_logps,reject_logps, chosen_loss, alpha=1):
+    log_odds = (chosen_logps - reject_logps) - (torch.log(1-torch.exp(chosen_logps)) - torch.log(1-torch.exp(reject_logps)))
+    sig_ratio = torch.nn.functional.sigmoid(log_odds)
+    ratio = torch.log(sig_ratio).mean()
+    loss = chosen_loss + alpha*ratio
+    return loss
+
+def simpo_loss(
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        gamma=1.,
+        beta=2.,
+        loss_type='sigmoid',
+        label_smoothing=0,
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """Compute the SimPO loss for a batch of policy model log probabilities.
+
+        Args:
+            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
+            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+
+        Returns:
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
+            The losses tensor contains the SimPO loss for each example in the batch.
+            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+        """
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        gamma_logratios = gamma / beta 
+        # pi_logratios = pi_logratios.to(accelerator.device)
+        logits = pi_logratios - gamma_logratios
+
+        if loss_type == "sigmoid":
+            losses = (
+                -F.logsigmoid(beta * logits) * (1 - label_smoothing)
+                - F.logsigmoid(-beta * logits) * label_smoothing
+            )
+        elif loss_type == "hinge":
+            losses = torch.relu(1 - beta * logits)
+        else:
+            raise ValueError(
+                f"Unknown loss type: {loss_type}. Should be one of ['sigmoid', 'hinge']"
+            )
+
+        # chosen_rewards = beta * policy_chosen_logps.to(accelerator.device).detach()
+        # rejected_rewards = beta * policy_rejected_logps.to(accelerator.device).detach()
+
+        return losses
