@@ -1364,7 +1364,7 @@ class QWenLMHeadModelDPO(QWenLMHeadModel):
         # print('reference_chosen_logps: ', reference_chosen_logps.item(), 'chosen_logps: ', chosen_logps.item())
         # print('reference_rejected_logps: ', reference_rejected_logps.item(), 'rejected_logps: ', rejected_logps.item())
         # reference_chosen_logps, reference_rejected_logps = reference_chosen_logps.to('cuda'), reference_rejected_logps.to('cuda')
-        loss_kwargs = {'beta': 0.1 , 'reference_free': False, 'label_smoothing': 0, 'ipo': False}
+        loss_kwargs = {'beta': 0.1 , 'reference_free': False, 'label_smoothing': 0, 'loss_type': 'dpo'}
         loss = preference_loss(
             policy_chosen_logps=chosen_logps,
             policy_rejected_logps=rejected_logps,

@@ -1,7 +1,8 @@
 import json
 import re
 import pandas as pd
-
+from trl import DPOTrainer
+DPOTrainer.get_batch_logps
 def convert_json_excel_for_diag2key():
     file = r'/fl-ift/nlp/hujunchao/git_root/sft/data_diag2key/result_dpo_result_retrain_dpo.jsonl'
     # file = r'/fl-ift/nlp/hujunchao/git_root/tmp/data_diag2key/dpo_result.jsonl'

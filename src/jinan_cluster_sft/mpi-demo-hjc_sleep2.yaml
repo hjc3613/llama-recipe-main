@@ -23,7 +23,7 @@ spec:
             - /bin/bash
             - -c
             args:
-            - sleep 7d
+            - sleep 1d
             resources:
               limits:
                 cpu: 10
@@ -38,16 +38,17 @@ spec:
             hostPath:
               path: /fl-ift/med
     Worker:
-      replicas: 2 #必须填写，分布式训练的节点数量，单节点就写1 ，2 个节点就写 2
+      replicas: 1 #必须填写，分布式训练的节点数量，单节点就写1 ，2 个节点就写 2
       template:
         spec:
           containers:
           #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
-          - image: harbor.unijn.cn/hujunchao/hjc_image7:v0
+          - image: harbor.unijn.cn/hujunchao/unillm-inference-root:v2.1.0-v240619-nodog
             securityContext:
               privileged: true
             command: ["/bin/sh","-c"]  # 这块command + args可以视作等价于docker exec -it /bin/bash -c "some_command"
-            args: ["sudo service ssh start && sleep 7d"]
+            args: ["sudo service ssh start && cd /fl-ift/med/hujunchao/git_root/Quant_and_triton && bash start_UniGPT-4.03-RecordGenerate-19-0524-qw2.sh"]
+            # args: ["sudo service ssh start && sleep 1d"]
             # 先启动ssh服务（便于后续登上去看状态），然后启动bash脚本，bash脚本替换为你想要运行的任务
             # 也可以直接运行python程序，加入要运行python，可以这样写(此处以启动triton server为例）
             # command: ["/bin/sh","-c"]

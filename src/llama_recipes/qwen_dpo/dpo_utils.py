@@ -16,7 +16,7 @@ def preference_loss(policy_chosen_logps: torch.FloatTensor,
                     reference_rejected_logps: torch.FloatTensor,
                     beta: float,
                     label_smoothing: float = 0.0,
-                    ipo: bool = False,
+                    loss_type: bool = 'dpo',
                     reference_free: bool = False) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
     """Compute the DPO loss for a batch of policy and reference model log probabilities.
 
@@ -43,8 +43,23 @@ def preference_loss(policy_chosen_logps: torch.FloatTensor,
 
     logits = pi_logratios - ref_logratios  # also known as h_{\pi_\theta}^{y_w,y_l}
 
-    if ipo:
+    if loss_type=='ipo':
         losses = (logits - 1/(2 * beta)) ** 2  # Eq. 17 of https://arxiv.org/pdf/2310.12036v2.pdf
+    elif loss_type == "kto_pair":
+            # eqn (7) of the HALOs paper
+            chosen_KL = (policy_chosen_logps - reference_chosen_logps).mean().clamp(min=0)
+            rejected_KL = (policy_rejected_logps - reference_rejected_logps).mean().clamp(min=0)
+
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            # As described in the KTO report, the KL term for chosen (rejected) is estimated using the rejected (chosen) half.
+            losses = torch.cat(
+                (
+                    1 - F.sigmoid(beta * (chosen_logratios - rejected_KL)),
+                    1 - F.sigmoid(beta * (chosen_KL - rejected_logratios)),
+                ),
+                0,
+            )
     else:
         # Eq. 3 https://ericmitchell.ai/cdpo.pdf; label_smoothing=0 gives original DPO (Eq. 7 of https://arxiv.org/pdf/2305.18290.pdf)
         losses = -F.logsigmoid(beta * logits) * (1 - label_smoothing) - F.logsigmoid(-beta * logits) * label_smoothing

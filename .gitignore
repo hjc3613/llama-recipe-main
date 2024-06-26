@@ -5,3 +5,4 @@ __pycache__
 data/
 *.safetensors
 checkpoints_qw
+dspy_demo
