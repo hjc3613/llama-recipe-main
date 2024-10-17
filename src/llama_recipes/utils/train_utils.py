@@ -97,6 +97,8 @@ def train(model, train_dataloader,eval_dataloader, tokenizer, optimizer, lr_sche
             total_length = len(train_dataloader)//gradient_accumulation_steps
             pbar = tqdm(colour="blue", desc=f"Training Epoch: {epoch+1}", total=total_length, dynamic_ncols=True)
             for step, batch in enumerate(train_dataloader):
+                if (step // gradient_accumulation_steps) % 50 == 0:
+                    print('progress has been :', (step // gradient_accumulation_steps) / total_length, '\n')
                 if train_config.max_train_step > 0 and total_train_steps > train_config.max_train_step:
                     max_steps_reached = True
                     if not train_config.enable_fsdp or local_rank==0:

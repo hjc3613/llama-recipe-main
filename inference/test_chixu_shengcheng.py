@@ -22,7 +22,7 @@ time_prefix = time.strftime("%Y%m%d",time.localtime(time.time()))
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.append('/fl-ift/med/hujunchao/git_root/llama-recipes-main/src/')
 from llama_recipes.qwen.modeling_qwen import QWenLMHeadModel
-
+TEMPLATE = "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n' }}{% endif %}{{'<|im_start|>' + message['role'] + '\n' + message['content']}}{% if loop.last %}{{ '<|im_end|>'}}{% else %}{{ '<|im_end|>\n' }}{% endif %}{% endfor %}"
 # hf_model_path = '/data/hujunchao/models/learn_gpt4_continue_gen_no_blank/checkpoint-25'
 # tokenizer = LlamaTokenizer.from_pretrained(hf_model_path)
 # model = UniGPTForCausalLM.from_pretrained(hf_model_path)
@@ -417,32 +417,122 @@ def process_dir(root, args):
         result = pd.DataFrame.from_dict(result)
         result.to_excel(path.replace('.xlsx', '_abnormal.xlsx'))
 
+def get_xiongbu_ct_chaifen(report):
+    template = f'''
+把下列影像学报告按照给定的身体部位拆分为子句，并标明阴阳性，输出部位或者阴阳性子句后，输出换行符
+需要注意的地方：
+\t一：其中建议性陈述、无身体部位且无阴阳性症状的子句可以忽略，不用输出。
+\t二：输出的部位必须在给定的部位范围之内
+身体部位如下：
+1.胸廓
+2.肺部血管，包含血管、支气管血管、肺动脉、肺静脉
+3.肺，包含肺、肺叶、肺尖、肺段
+4.气管支气管，包含气管、支气管、肺泡管、肺泡囊
+5.肺门
+6.纵膈
+7.心脏，包含心包、主动脉、心房、心室、心肌、瓣膜、心尖、冠状动脉
+8.胸膜，包含膈膜
+9.胸廓骨质，包含胸椎、胸骨、肋骨、锁骨、肩胛骨
+10.胸壁软组织，包含胸壁、胸锁乳突肌、胸大肌、胸小肌、背阔肌、肩胛下肌、大圆肌、乳腺、乳房、乳头
+11.甲状腺
+12.肝脏
+13.肾
+14.脾脏
+15.食管
+三：阳性描述，需要按照语义进行拆分，每个阳性症状都要是语义完整的子句,如果涉及多个部位，需要按照部位进行拆分。
+四：输出结果中不需要解释
+五：拆分结果要忠实于影像学报告，不要输出与影像学报告无关的内容
+
+根据上述规范把下列影像学报告进行拆分。影像学报告：{report}
+'''
+    return template
+
+def get_fubu_ct_chaifen(report):
+    template = f'''
+把下列影像学报告按照给定的身体部位拆分为子句，并标明阴阳性。
+需要注意的地方：
+一：除了建议性陈述的子句可以忽略，不用输出，其他的子句都需要拆分，不能有遗漏。
+二：输出的部位必须在给定的部位范围之内
+身体部位如下：
+1、肝
+2、胆
+3、胰
+4、脾
+5、肾，包括肾、输尿管
+6、肾上腺
+7、子宫，包括子宫、附件
+8、前列腺，包括前列腺、精囊腺
+9、膀胱
+10、腹腔，包括腹腔、腹膜、盆腔、盆壁、腹股沟
+11、胃肠道，包括胃、结肠、直肠、十二指肠、阑尾
+12、骨盆及周围骨质
+13、其他
+三：阳性描述，需要按照语义进行拆分，每个阳性症状都要是语义完整的子句
+四：输出结果中不需要任何解释
+
+根据上述规范把下列影像学报告进行拆分。影像学报告：{report}
+'''
+    return template
+
+def get_toulu_ct_chaifen(report):
+    template = f'''
+把下列影像学报告按照给定的身体部位拆分为子句，并标明阴阳性，输出部位或者阴阳性子句后，输出换行符
+需要注意的地方：
+\t一：其中建议性陈述、无身体部位且无阴阳性症状的子句可以忽略，不用输出。
+\t二：输出的部位必须在给定的部位范围之内
+身体部位如下：
+1.头颅形态：头颅形态、大脑半球 
+2.脑实质：大脑（枕叶 颞叶 额叶 顶叶 岛叶）、小脑（小脑蚓部 小脑半球） 、脑干（中脑 桥脑 延髓） 、白质、灰质、半卵圆中心、放射冠、大脑皮层、基底节、海马体、下丘脑、垂体、鞍区 蛛网膜下腔、大脑镰 、颅板下 硬膜外
+3.脑室：脑室 松果体 透明腔间隔
+4.脑沟、裂、池：脑沟、裂、池；脑沟、脑裂、脑池
+5.中线：中线
+6、颅骨：顶骨、颞骨、额骨、蝶骨、枕骨、筛骨、上颌骨、颧骨、鼻骨、泪骨、腭骨、鼻甲骨、犁骨、下颌骨、舌骨（提及骨折线的放在这个部位）
+7.其他:颅内血管(乙状窦、直窦、海绵)、鼻（鼻窦 额窦 上颌窦 筛窦 蝶窦）、耳朵（外耳、中耳、内耳、耳道）、乳突、其他
+三：阳性描述，需要按照语义进行拆分，每个阳性症状都要是语义完整的子句,如果涉及多个部位，需要按照部位进行拆分。
+四：输出结果中不需要解释
+五：拆分结果要忠实于影像学报告，不要输出与影像学报告无关的内容
+
+根据上述规范把下列影像学报告进行拆分。影像学报告：{report}
+'''
+    return template
+
 def only_pred_inputoutput(args):
+    model_path = os.path.join(args.model_root, args.model_path)
     interface = DecodeInterface(
-        hf_model_path=args.model_path
+        hf_model_path=model_path
     )
     if args.file.endswith('.jsonl'):
         df = pd.read_json(args.file, lines=True)
     elif args.file.endswith('.xlsx'):
         df = pd.read_excel(args.file, sheet_name=args.sheet)
     result = []
-    df = df.iloc[:int(args.record_nums)]
+    df = df.iloc[:int(args.record_nums)].fillna('')
     for idx, row in tqdm(df.iterrows(), total=len(df)):
         row = dict(row)
         try:
-            inputs = row['input']
-            # messages = [
-            #     # {"role": "system", "content": "You are a helpful assistant."},
-            #     # {'role':'user', 'content':row['dialogue']+'\n基于上述对话，通过问答方式对对话做总结，包括但不限于患者的症状、疾病、用药、手术、血糖指标、血压指标等详信息则要尽量详细复述出来，这些总结内容要满足能生成一份高质量的病历报告：'}
-            #     {'role':'user', 'content':row['dialogue']+'\nplease generate an standart medical record correspond to the above dialogue, including chief complaint、history of present illness、history of past illness、family history、Physical examination、treatment opinions, result in english：'}
-            # ]
-            # inputs = interface.tokenizer.apply_chat_template(
-            #     messages,
-            #     tokenize=False,
-            #     add_generation_prompt=True
-            # )
+            inputs = row['影像诊断']
+            inputs = get_toulu_ct_chaifen(inputs)
+            # inputs = inputs+'。请根据上述放射报告异常描述，生成诊断：'
+            # inputs = inputs.replace('根据上述影像报告，先抽取曲中的异常描述，再根据异常描述生成诊断：', '请根据上述影像表现，生成完善的诊断：')
+            # inputs = inputs.replace('根据上述影像报告，先抽取曲中的异常描述，再根据异常描述生成诊断：','根据上述影像报告，针对核心异常生成诊断：')
+            messages = [
+                {'role':'user','content':inputs}
+            ]
+            inputs = interface.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                chat_template=TEMPLATE
+            )
+            inputs  = inputs + '\n<|im_start|>system\n'
             # inputs = f'{row["dialogue"]}\n请结合上述对话，总结出对话中出现的问题和答案:'
             # interface.forward('''        头颅形态如常，脑实质内无明显异常密度区及形态改变区。脑室系统、脑沟、裂、池无异常。中线结构居中。颅骨未见明确骨折征象。额部头皮软组织密度增高。\n请根据上述影像报告，生成诊断结论: 1、头颅CT平扫脑内未见明显异常；  2(Somehow I don't like the word "increased" in the report, so I will use "edema" instead. )额部头皮软组织肿胀。''', idx)
+            
+            # template = '已知腹部CT检查包含了肝、胆、脾、胰、肾及肾上腺、腹腔、子宫/前列腺等部位的检查，同时还可能涉及胃肠道、组织液等位置，每个部位分别从位置、形态大小、密度灶、增厚等方面进行异常判断。每个部位当无异常时，写入固定的话术，当有异常时，则写入对应的异常。请根据上述规范，针对下列腹部CT异常所见进行补全：\n异常报告：{abnormal}\n性别：{sex}\n补全结果：'
+            # sex = row['sex']
+            # asr = row['asr']
+            # inputs = template.format_map({'abnormal':asr, 'sex':sex})
+            
             res = interface.generate(inputs)
         except KeyboardInterrupt:
             traceback.print_exc()
@@ -452,12 +542,12 @@ def only_pred_inputoutput(args):
             traceback.print_exc()
             res = 'error'
 
-        row['pred'] = res
+        row['pred2'] = res
         
         print('='*100)
         print('input\n', inputs)
         print('*'*50)
-        print('pred\n', row['pred'])
+        print('pred\n', row['pred2'])
         print('*'*50)
         print('label\n', row.get('output', ''))
         
@@ -788,6 +878,7 @@ if __name__ == '__main__':
     # process_dir('/data/hujunchao/record_gen/gpt4_continue_gen_new/pre_label/0927数据标注质量验证/20230927邵波')
     parser = ArgumentParser()
     parser.add_argument('--model_path', required=True, type=str)
+    parser.add_argument('--model_root', required=False, default='/fl-ift/med/hujunchao/models/', type=str)
     parser.add_argument('--file', required=True, type=str)
     parser.add_argument('--tokenizer_name', required=False, default=None)
     parser.add_argument('--decode_type', required=False, default='common')

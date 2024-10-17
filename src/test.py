@@ -4,6 +4,7 @@ import os
 from llama_recipes.utils.supervised_dataset import SupervisedDataset
 from transformers import AutoTokenizer
 
+
 def read_reference_score(indexes):
     reference_score_caches = '/fl-ift/nlp/hujunchao/git_root/llama-recipes-main/src/reference_score_caches'
     result = []

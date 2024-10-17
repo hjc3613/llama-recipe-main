@@ -35,6 +35,8 @@ def jload_v2(f, mode="r"):
 
 def xlsload(f):
     df = pd.read_excel(f)
+    assert 'input' in df.columns, f
+    assert 'output' in df.columns, f
     result = [dict(row) for idx, row in df.iterrows()]
     return result
 

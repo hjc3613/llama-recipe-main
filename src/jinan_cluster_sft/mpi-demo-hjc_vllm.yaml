@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v2beta1
 kind: MPIJob
 metadata:
-  name: hjc-dev-1-node-sleep-bak  #必须填写，任务的名字，用户自定义
+  name: hjc-dev-1-node-vllm  #必须填写，任务的名字，用户自定义
   namespace: med  #必须填写，任务所在的 namespace,只有 2个可选一个是自己的名字一个是自己组的名字，例如刘畅用户只能填，liuchang 或者 nlp
 spec:
   slotsPerWorker: 8 
@@ -15,7 +15,7 @@ spec:
         spec:
           containers:
           #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
-          - image: harbor.unijn.cn/hujunchao/hjc_image_v8:v0     #必须填写，自己构建的镜像，注意一定要上传到 harbor 才能使用
+          - image: harbor.unijn.cn/hujunchao/hjc_image_vllm:v2     #必须填写，自己构建的镜像，注意一定要上传到 harbor 才能使用
             securityContext:
               privileged: true
             name: mpi-launcher
@@ -43,33 +43,27 @@ spec:
         spec:
           containers:
           #- image: harbor.unisound.uai/lvdongdong/cuda:v0.5
-          - image: harbor.unijn.cn/hujunchao/hjc_image_v8:v0
+          - image: harbor.unijn.cn/hujunchao/hjc_image_vllm:v2
             securityContext:
               privileged: true
             command: ["/bin/sh","-c"]  # 这块command + args可以视作等价于docker exec -it /bin/bash -c "some_command"
-            args: ["sudo service ssh start && sleep 1d"]
+            # args: ["sudo service ssh start && sleep 2d"]
+            # args: ["sudo service ssh start && cd /fl-ift/med/hujunchao/git_root/llama-recipes-main/src/ && bash ft_single_node.sh train_merge"]
             # 先启动ssh服务（便于后续登上去看状态），然后启动bash脚本，bash脚本替换为你想要运行的任务
             # 也可以直接运行python程序，加入要运行python，可以这样写(此处以启动triton server为例）
             # command: ["/bin/sh","-c"]
-            # args: [
-            # "sudo service ssh start && cd /fl-ift/med/hujunchao/git_root/llama-recipes-main/src/ && torchrun --nnodes 1 --nproc_per_node 8 finetuning.py \
-            # --model_name /fl-ift/med/hujunchao/models/Qwen1.5-72B-Chat/ \
-            # --dataset /fl-ift/med/hujunchao/git_root/llama-recipes-main/data/对话到病历0219版本数据/train_dialogue2report_20240219_389_clear_prompt1.xlsx \
-            # --output_dir /fl-ift/med/hujunchao/models/train_dialogue2report_20240219_389_clear_prompt1 \
-            # --enable_fsdp \
-            # --low_cpu_fsdp \
-            # --batch_size_training 1 \
-            # --dist_checkpoint_root_folder checkpoints_qw \
-            # --dist_checkpoint_folder fine_tuned_qw2 \
-            # --num_epochs 5 \
-            # --gradient_accumulation_steps 8 \
-            # --fsdp_config.pure_bf16 \
-            # --batching_strategy padding \
-            # --lr 2e-5 \
-            # --seed 123456 \
-            # --gradient_clipping \
-            # --fsdp_cpu_offload \ "
-            #  ]
+            args: [
+            "python3 -m vllm.entrypoints.openai.api_server \
+            --model /fl-ift/med/common/Qwen1.5-110B-Chat-pro-quant-turbomind \
+            --quantization awq \
+            --tensor-parallel 8 \
+            --host 0.0.0.0 \
+            --served-model-name qwen110_quant \
+            --gpu-memory-utilization 0.7 \
+            --max-model-len 16384 \
+            --enable-chunked-prefill false \
+            --port 8089 \ "
+            ]
             name: mpi-worker
             resources:
               limits:

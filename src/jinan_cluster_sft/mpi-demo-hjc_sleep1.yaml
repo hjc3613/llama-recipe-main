@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v2beta1
 kind: MPIJob
 metadata:
-  name: hjc-dev-1-node-sleep  #必须填写，任务的名字，用户自定义
+  name: hjc-dev-1-node-sleep-4  #必须填写，任务的名字，用户自定义
   namespace: med  #必须填写，任务所在的 namespace,只有 2个可选一个是自己的名字一个是自己组的名字，例如刘畅用户只能填，liuchang 或者 nlp
 spec:
   slotsPerWorker: 8 
@@ -47,7 +47,7 @@ spec:
             securityContext:
               privileged: true
             command: ["/bin/sh","-c"]  # 这块command + args可以视作等价于docker exec -it /bin/bash -c "some_command"
-            # args: ["sudo service ssh start && sleep 1d"]
+            # args: ["sudo service ssh start && sleep 2d"]
             args: ["sudo service ssh start && cd /fl-ift/med/hujunchao/git_root/llama-recipes-main/src/ && bash ft_single_node.sh train_merge"]
             # 先启动ssh服务（便于后续登上去看状态），然后启动bash脚本，bash脚本替换为你想要运行的任务
             # 也可以直接运行python程序，加入要运行python，可以这样写(此处以启动triton server为例）
