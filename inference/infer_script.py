@@ -16,6 +16,8 @@ from argparse import ArgumentParser
 from peft import AutoPeftModelForCausalLM
 import traceback
 import copy
+import transformers
+
 # from merge_all_summary import ReOrderSummary, Method
 
 time_prefix = time.strftime("%Y%m%d",time.localtime(time.time())) 
